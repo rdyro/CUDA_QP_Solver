@@ -281,8 +281,8 @@ function sptranspose!(Xp, Xi, Xx, Ap, Ai, Ax)
     Xp[k] = countsum
     countsum += overwritten
   end
-  #= @inbounds =# for i in 1:length(Ap)-1
-    for k in Ap[i]:Ap[i+1]-1
+  #= @inbounds =# for i in 1:(length(Ap)-1)
+    for k in (Ap[i]):(Ap[i+1]-1)
       Xk = Xp[Ai[k]+1]
       Xi[Xk] = i
       Xx[Xk] = Ax[k]

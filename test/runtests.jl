@@ -1,8 +1,6 @@
 using LinearAlgebra, SparseArrays, Random, Printf
 using Test
 include(abspath(joinpath(@__DIR__, "..", "src", "gpu_sparse.jl")))
-#include(abspath(joinpath(@__DIR__, "..", "src", "spmatmul.jl")))
-include(abspath(joinpath(@__DIR__, "..", "src", "sort.jl")))
 
 @testset "Sparse Linear Algebra Routines - binary search" begin
   @test binary_search([0, 1, 2, 3, 4], 1) == 2
