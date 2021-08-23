@@ -1,3 +1,5 @@
+include("vec.jl")
+
 # Utils ########################################################################
 @inline function binary_search(a, i)
   if a[end] < i || a[1] > i
@@ -37,13 +39,16 @@ end
 
 function mergesort!(a, lo, hi, iwork)
   nb = hi - lo
-  if nb <= 1
-    return
+  (nb < 1) && (return)
+  if nb == 2
+    if a[lo] > a[hi]
+      a[lo], a[hi] = a[hi], a[lo]
+    end
   end
 
   step, odd_run = 1, true
   ##= @inbounds =# while step < nb || !odd_run
-  #= @inbounds =# while step < nb
+  #= @inbounds =# while step <= nb
     #= @inbounds =# for i in 1:div(nb, 2 * step)+1
       loi = min(lo + 2 * (i - 1) * step, hi)
       mii = min(lo + 2 * (i - 1) * step + step - 1, hi)
@@ -210,82 +215,6 @@ end
   return x, iszero
 end
 
-function spmatmulATB!(Cp, Ci, Cx, Ap, Ai, Ax, m, n, Bp, Bi, Bx, p, q) # GPU ok
-  k, k_old = 0, 0
-  Cp[1] = 1
-  #= @inbounds =# for j in 1:q
-    #= @inbounds =# for i in 1:n
-      x, iszero = spvecdot(view(Ai, Ap[i]:Ap[i+1]-1), view(Ax, Ap[i]:Ap[i+1]-1), 
-                           view(Bi, Bp[j]:Bp[j+1]-1), view(Bx, Bp[j]:Bp[j+1]-1))
-      if !iszero
-        k += 1
-        Ci[k] = i
-        Cx[k] = x
-      end
-    end
-    Cp[j+1] = Cp[j] + (k - k_old)
-    k_old = k
-  end
-end
-
-function spmatmul!(Cp, Ci, Cx, m, Ap, Ai, Ax, Bp, Bi, Bx, iwork)
-  xb, sort_iwork = view(iwork, 1:m), view(iwork, m+1:length(iwork))
-  for i in 1:m
-    xb[i] = 0
-  end
-
-  nnzC = length(Ci)
-  ip = 1
-  nB = length(Bp) - 1
-  for i in 1:nB
-    @assert ip + m - 1 <= nnzC
-    Cp[i] = ip
-    ip0 = ip
-    k0 = ip - 1
-    #for jp in nzrange(B, i)
-    for jp in Bp[i]:Bp[i+1]-1
-      nzB = Bx[jp]
-      j = Bi[jp]
-      #for kp in nzrange(A, j)
-      for kp in Ap[j]:Ap[j+1]-1
-        nzC = Ax[kp] * nzB
-        k = Ai[kp]
-        if xb[k] == 1
-          Cx[k+k0] += nzC
-        else
-          Cx[k+k0] = nzC
-          xb[k] = 1
-          Ci[ip] = k
-          ip += 1
-        end
-      end
-    end
-    if ip > ip0
-      #if prefer_sort(ip-k0, m)
-      if true
-        # in-place sort of indices. Effort: O(nnz*ln(nnz)).
-        #sort!(Ci, ip0, ip-1, QuickSort, Base.Order.Forward)
-        mergesort!(Ci, ip0, ip-1, sort_iwork)
-        for vp in ip0:ip-1
-          k = Ci[vp]
-          xb[k] = 0
-          Cx[vp] = Cx[k+k0]
-        end
-      else
-        # scan result vector (effort O(m))
-        for k in 1:m
-          if xb[k] == 1
-            xb[k] = 0
-            Ci[ip0] = k
-            Cx[ip0] = Cx[k+k0]
-            ip0 += 1
-          end
-        end
-      end
-    end
-  end
-  Cp[nB+1] = ip
-end
 
 function spcopy!(Cp, Ci, Cx, Ap, Ai, Ax)
   #= @inbounds =# for i in 1:length(Ap)
@@ -365,7 +294,7 @@ end
 
 function spdiagadd!(Cp, Ci, Cx, lo, hi, alf)
   #= @inbounds =# for i in lo:hi
-    col = view(Ci, Cp[i]:Cp[i+1]-1)
+    col = view(Ci, Cp[i] : (Cp[i+1]-1))
     idx = binary_search(col, i)
     if idx >= 1 && idx <= length(col)
       Cx[Cp[i]+idx-1] = Cx[Cp[i]+idx-1] + alf
@@ -374,3 +303,92 @@ function spdiagadd!(Cp, Ci, Cx, lo, hi, alf)
   return
 end
 # Routines #####################################################################
+
+# Mat Mul ######################################################################
+prefer_sort(nz, m) = m > 6 && 3 * ceil(log2(nz)) * nz < m
+
+function estimate_mulsize(m, nnzA, n, nnzB, k)
+  p = (nnzA / (m * n)) * (nnzB / (n * k))
+  p >= 1 ? m * k : p > 0 ? Int(ceil(-expm1(log1p(-p) * n) * m * k)) : 0 # (1-(1-p)^n)*m*k
+end
+
+@inline nzrange_(Ap::Array, i) = (Ap[i]):(Ap[i+1]-1)
+
+function spmatmul(Cp, Ci, Cx, mA, Ap, Ai, Ax, Bp, Bi, Bx, iwork)
+  nA, nB = length(Ap) - 1, length(Bp) - 1
+  nnzA, nnzB = Ap[end] - 1, Bp[end] - 1
+  nnzC = length(Cx)
+
+  #nnzC = min(estimate_mulsize(mA, nnzA, nA, nnzB, nB) * 11 / 10 + mA, mA * nB)
+  #nnzC = nnzC * 10
+
+  xb, sort_iwork = view(iwork, 1:mA), view(iwork, mA+1:length(iwork))
+
+  ip = 1
+  for i in 1:nB
+    @assert ip + mA - 1 <= nnzC
+    Cp[i] = ip
+    ip = spcolmul!(Ci, Cx, xb, i, ip, mA, Ap, Ai, Ax, Bp, Bi, Bx, sort_iwork)
+  end
+  Cp[nB+1] = ip
+end
+
+# process single rhs column
+@inline function spcolmul!(
+  Ci,
+  Cx,
+  xb,
+  i,
+  ip,
+  mA,
+  Ap,
+  Ai,
+  Ax,
+  Bp,
+  Bi,
+  Bx,
+  sort_iwork,
+)
+  ip0 = ip
+  k0 = ip - 1
+  for jp in (Bp[i]):(Bp[i+1]-1)
+    nzB = Bx[jp]
+    j = Bi[jp]
+    for kp in (Ap[j]):(Ap[j+1]-1)
+      nzC = Ax[kp] * nzB
+      k = Ai[kp]
+      if xb[k] == 1
+        Cx[k+k0] += nzC
+      else
+        Cx[k+k0] = nzC
+        xb[k] = 1
+        Ci[ip] = k
+        ip += 1
+      end
+    end
+  end
+  if ip > ip0
+    if prefer_sort(ip - k0, mA)
+      # in-place sort of indices. Effort: O(nnz*ln(nnz)).
+      sort!(Ci, ip0, ip - 1, QuickSort, Base.Order.Forward)
+      #mergesort!(Ci, ip0, ip - 1, sort_iwork)
+      for vp in ip0:ip-1
+        k = Ci[vp]
+        xb[k] = 0
+        Cx[vp] = Cx[k+k0]
+      end
+    else
+      # scan result vector (effort O(mA))
+      for k in 1:mA
+        if xb[k] == 1
+          xb[k] = 0
+          Ci[ip0] = k
+          Cx[ip0] = Cx[k+k0]
+          ip0 += 1
+        end
+      end
+    end
+  end
+  return ip
+end
+# Mat Mul ######################################################################
