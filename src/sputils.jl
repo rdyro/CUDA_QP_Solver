@@ -5,10 +5,8 @@
 end
 
 macro view_mem(work, size)
-  return esc(
-    quote
-      @assert $size <= length($work)
-      view($work, 1:($size)), view($work, ($size+1):(length($work)))
-    end,
-  )
+  return esc(quote
+    @assert $size <= length($work)
+    view($work, 1:($size)), view($work, ($size+1):(length($work)))
+  end)
 end

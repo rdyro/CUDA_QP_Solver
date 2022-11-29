@@ -21,18 +21,26 @@ end
 
 function merge!(a, lo, mi, hi, iwork)
   i, j, k = lo, mi + 1, lo
-  #= @inbounds =# while i <= mi && j <= hi
+  while i <= mi && j <= hi  #= @inbounds =#
     if a[i] > a[j]
-      iwork[k] = a[j]; j += 1; k += 1
+      iwork[k] = a[j]
+      j += 1
+      k += 1
     else
-      iwork[k] = a[i]; i += 1; k += 1
+      iwork[k] = a[i]
+      i += 1
+      k += 1
     end
   end
-  #= @inbounds =# while i <= mi
-    iwork[k] = a[i]; i += 1; k += 1
+  while i <= mi  #= @inbounds =#
+    iwork[k] = a[i]
+    i += 1
+    k += 1
   end
-  #= @inbounds =# while j <= hi
-    iwork[k] = a[j]; j += 1; k += 1
+  while j <= hi  #= @inbounds =#
+    iwork[k] = a[j]
+    j += 1
+    k += 1
   end
   return
 end
@@ -48,8 +56,8 @@ function mergesort!(a, lo, hi, iwork)
 
   step, odd_run = 1, true
   ##= @inbounds =# while step < nb || !odd_run
-  #= @inbounds =# while step <= nb
-    #= @inbounds =# for i in 1:div(nb, 2 * step)+1
+  while step <= nb  #= @inbounds =#
+    for i in 1:div(nb, 2 * step)+1    #= @inbounds =#
       loi = min(lo + 2 * (i - 1) * step, hi)
       mii = min(lo + 2 * (i - 1) * step + step - 1, hi)
       hii = min(lo + 2 * (i - 1) * step + 2 * step - 1, hi)
@@ -75,9 +83,9 @@ end
 # Routines #####################################################################
 function sptriu!(Ap, Ai, Ax)
   k, k_old, n = 0, 0, length(Ap) - 1
-  Aps, Ape = Ap[1], Ap[2]-1
-  #= @inbounds =# for i in 1:n
-    #= @inbounds =# for j in Aps:Ape
+  Aps, Ape = Ap[1], Ap[2] - 1
+  for i in 1:n  #= @inbounds =#
+    for j in Aps:Ape    #= @inbounds =#
       row, col = Ai[j], i
       if row <= col
         k += 1
@@ -86,7 +94,7 @@ function sptriu!(Ap, Ai, Ax)
       end
     end
     if i < n
-      Aps, Ape = Ap[i+1], Ap[i+2]-1
+      Aps, Ape = Ap[i+1], Ap[i+2] - 1
     end
     Ap[i+1] = Ap[i] + (k - k_old)
     k_old = k
@@ -96,9 +104,9 @@ end
 
 function sptril!(Ap, Ai, Ax)
   k, k_old, n = 0, 0, length(Ap) - 1
-  Aps, Ape = Ap[1], Ap[2]-1
-  #= @inbounds =# for i in 1:n
-    #= @inbounds =# for j in Aps:Ape
+  Aps, Ape = Ap[1], Ap[2] - 1
+  for i in 1:n  #= @inbounds =#
+    for j in Aps:Ape    #= @inbounds =#
       row, col = Ai[j], i
       if row >= col
         k += 1
@@ -107,7 +115,7 @@ function sptril!(Ap, Ai, Ax)
       end
     end
     if i < n
-      Aps, Ape = Ap[i+1], Ap[i+2]-1
+      Aps, Ape = Ap[i+1], Ap[i+2] - 1
     end
     Ap[i+1] = Ap[i] + (k - k_old)
     k_old = k
@@ -117,8 +125,8 @@ end
 
 function spscal!(Ap, Ai, Ax, alf)
   n = length(Ap) - 1
-  #= @inbounds =# for i in 1:n
-    #= @inbounds =# for j in Ap[i]:Ap[i+1]-1
+  for i in 1:n  #= @inbounds =#
+    for j in Ap[i]:Ap[i+1]-1    #= @inbounds =#
       Ax[j] = Ax[j] * alf
     end
   end
@@ -126,61 +134,39 @@ end
 
 function spmul!(y, Ap, Ai, Ax, x) # GPU ok
   n = length(Ap) - 1
-  vecfill!(y, 0.0)
-  #= @inbounds =# for j in 1:n
-    #= @inbounds =# for i in Ap[j]:Ap[j+1]-1
+  vecfill!(y, 0f0)
+  for j in 1:n  #= @inbounds =#
+    for i in Ap[j]:Ap[j+1]-1    #= @inbounds =#
       y[Ai[i]] += Ax[i] * x[j]
     end
   end
-end
-
-function spmatadd(Ap, Ai, Ax, Bp, Bi, Bx, m, n)
-  nz = 0
-  #= @inbounds =# for k in 1:n
-    An, Bn = Ap[k+1] - Ap[k], Bp[k+1] - Bp[k]
-    As, Bs = Ap[k] - 1, Bp[k] - 1
-    i, j = 1, 1
-    while i <= An || j <= Bn
-      if i <= An && j <= Bn && Ai[As + i] == Bi[Bs + j]
-        i, j = i + 1, j + 1
-      elseif i > An || (j <= Bn && Bi[Bs + j] < Ai[As + i])
-        j += 1
-      else
-        i += 1
-      end
-      nz += 1
-    end
-  end
-  Cp, Ci, Cx = zeros(Int, n + 1), zeros(Int, nz), zeros(nz)
-  spmatadd!(Cp, Ci, Cx, Ap, Ai, Ax, Bp, Bi, Bx)
-  return Cp, Ci, Cx
 end
 
 function spmatadd!(Cp, Ci, Cx, Ap, Ai, Ax, Bp, Bi, Bx) # GPU ok
   Cp[1] = 1
   l, l_old = 0, 0
   n = length(Ap) - 1
-  #= @inbounds =# for k in 1:n
+  for k in 1:n  #= @inbounds =#
     An, Bn = Ap[k+1] - Ap[k], Bp[k+1] - Bp[k]
     As, Bs = Ap[k] - 1, Bp[k] - 1
     i, j = 1, 1
-    #= @inbounds =# while i <= An || j <= Bn
-      if i <= An && j <= Bn && Ai[As + i] == Bi[Bs + j]
+    while i <= An || j <= Bn    #= @inbounds =#
+      if i <= An && j <= Bn && Ai[As+i] == Bi[Bs+j]
         l += 1
-        Ci[l] = Ai[As + i]
-        Cx[l] = Ax[As + i] + Bx[Bs + j]
+        Ci[l] = Ai[As+i]
+        Cx[l] = Ax[As+i] + Bx[Bs+j]
 
         i, j = i + 1, j + 1
-      elseif i > An || (j <= Bn && Bi[Bs + j] < Ai[As + i])
+      elseif i > An || (j <= Bn && Bi[Bs+j] < Ai[As+i])
         l += 1
-        Ci[l] = Bi[Bs + j]
-        Cx[l] = Bx[Bs + j]
+        Ci[l] = Bi[Bs+j]
+        Cx[l] = Bx[Bs+j]
 
         j += 1
       else
         l += 1
-        Ci[l] = Ai[As + i]
-        Cx[l] = Ax[As + i]
+        Ci[l] = Ai[As+i]
+        Cx[l] = Ax[As+i]
 
         i += 1
       end
@@ -191,11 +177,11 @@ function spmatadd!(Cp, Ci, Cx, Ap, Ai, Ax, Bp, Bi, Bx) # GPU ok
   return Cp, view(Ci, 1:l), view(Cx, 1:l)
 end
 
-@inline function spvecdot(Ai, Ax, Bi, Bx, check_only=false)
-  x, iszero = 0.0, true
+@inline function spvecdot(Ai, Ax, Bi, Bx, check_only = false)
+  x, iszero = 0f0, true
   i, j = 1, 1
   n, m = length(Ai), length(Bi)
-  #= @inbounds =# while i <= n && j <= m
+  while i <= n && j <= m  #= @inbounds =#
     while i <= n && j <= m && Ai[i] < Bi[j]
       i += 1
     end
@@ -204,7 +190,7 @@ end
     end
     if i <= n && j <= m && Ai[i] == Bi[j]
       if check_only
-        return 1.0, false
+        return 1f0, false
       end
       iszero = false
       x += Ax[i] * Bx[j]
@@ -217,10 +203,10 @@ end
 
 
 function spcopy!(Cp, Ci, Cx, Ap, Ai, Ax)
-  #= @inbounds =# for i in 1:length(Ap)
+  for i in 1:length(Ap)  #= @inbounds =#
     Cp[i] = Ap[i]
   end
-  #= @inbounds =# for i in 1:length(Ai)
+  for i in 1:length(Ai)  #= @inbounds =#
     Ci[i] = Ai[i]
     Cx[i] = Ax[i]
   end
@@ -229,13 +215,13 @@ end
 function spvcat!(Cp, Ci, Cx, m, Ap, Ai, Ax, Bp, Bi, Bx)
   l = 0
   Cp[1] = 1
-  #= @inbounds =# for i in 1:length(Ap)-1
-    #= @inbounds =# for j in Ap[i]:Ap[i+1]-1
+  for i in 1:length(Ap)-1  #= @inbounds =#
+    for j in Ap[i]:Ap[i+1]-1    #= @inbounds =#
       l += 1
       Ci[l] = Ai[j]
       Cx[l] = Ax[j]
     end
-    #= @inbounds =# for j in Bp[i]:Bp[i+1]-1
+    for j in Bp[i]:Bp[i+1]-1    #= @inbounds =#
       l += 1
       Ci[l] = Bi[j] + m
       Cx[l] = Bx[j]
@@ -247,18 +233,18 @@ end
 
 function sphcat!(Cp, Ci, Cx, Ap, Ai, Ax, Bp, Bi, Bx)
   n1, n2 = length(Ap) - 1, length(Bp) - 1
-  #= @inbounds =# for i in 1:n2
+  for i in 1:n2  #= @inbounds =#
     Cp[n1+i+1] = Bp[i+1] + Ap[end] - 1
   end
-  #= @inbounds =# for i in 1:n1+1
+  for i in 1:n1+1  #= @inbounds =#
     Cp[i] = Ap[i]
   end
   Annz, Bnnz = length(Ax), length(Bx)
-  #= @inbounds =# for i in 1:Bnnz
+  for i in 1:Bnnz  #= @inbounds =#
     Ci[i+Annz] = Bi[i]
     Cx[i+Annz] = Bx[i]
   end
-  #= @inbounds =# for i in 1:Annz
+  for i in 1:Annz  #= @inbounds =#
     Ci[i] = Ai[i]
     Cx[i] = Ax[i]
   end
@@ -268,20 +254,20 @@ end
 # taken from Julia's stdlib/SparseArrays
 function sptranspose!(Xp, Xi, Xx, Ap, Ai, Ax)
   n, nnz = length(Xp) - 1, length(Ai)
-  #= @inbounds =# for i in 1:n+1
+  for i in 1:n+1  #= @inbounds =#
     Xp[i] = 0
   end
   Xp[1] = 1
-  #= @inbounds =# for k in 1:nnz
+  for k in 1:nnz  #= @inbounds =#
     Xp[Ai[k]+1] += 1
   end
   countsum = 1
-  #= @inbounds =# for k in 2:n+1
+  for k in 2:n+1  #= @inbounds =#
     overwritten = Xp[k]
     Xp[k] = countsum
     countsum += overwritten
   end
-  #= @inbounds =# for i in 1:(length(Ap)-1)
+  for i in 1:(length(Ap)-1)  #= @inbounds =#
     for k in (Ap[i]):(Ap[i+1]-1)
       Xk = Xp[Ai[k]+1]
       Xi[Xk] = i
@@ -293,8 +279,8 @@ function sptranspose!(Xp, Xi, Xx, Ap, Ai, Ax)
 end
 
 function spdiagadd!(Cp, Ci, Cx, lo, hi, alf)
-  #= @inbounds =# for i in lo:hi
-    col = view(Ci, Cp[i] : (Cp[i+1]-1))
+  for i in lo:hi  #= @inbounds =#
+    col = view(Ci, Cp[i]:(Cp[i+1]-1))
     idx = binary_search(col, i)
     if idx >= 1 && idx <= length(col)
       Cx[Cp[i]+idx-1] = Cx[Cp[i]+idx-1] + alf
@@ -314,7 +300,7 @@ end
 
 @inline nzrange_(Ap::Array, i) = (Ap[i]):(Ap[i+1]-1)
 
-function spmatmul(Cp, Ci, Cx, mA, Ap, Ai, Ax, Bp, Bi, Bx, iwork)
+function spmatmul!(Cp, Ci, Cx, mA, Ap, Ai, Ax, Bp, Bi, Bx, iwork)
   nA, nB = length(Ap) - 1, length(Bp) - 1
   nnzA, nnzB = Ap[end] - 1, Bp[end] - 1
   nnzC = length(Cx)
@@ -323,6 +309,9 @@ function spmatmul(Cp, Ci, Cx, mA, Ap, Ai, Ax, Bp, Bi, Bx, iwork)
   #nnzC = nnzC * 10
 
   xb, sort_iwork = view(iwork, 1:mA), view(iwork, mA+1:length(iwork))
+  for i in 1:length(xb)
+    xb[i] = 0
+  end
 
   ip = 1
   for i in 1:nB
@@ -370,8 +359,8 @@ end
   if ip > ip0
     if prefer_sort(ip - k0, mA)
       # in-place sort of indices. Effort: O(nnz*ln(nnz)).
-      sort!(Ci, ip0, ip - 1, QuickSort, Base.Order.Forward)
-      #mergesort!(Ci, ip0, ip - 1, sort_iwork)
+      #sort!(Ci, ip0, ip - 1, QuickSort, Base.Order.Forward)
+      mergesort!(Ci, ip0, ip - 1, sort_iwork)
       for vp in ip0:ip-1
         k = Ci[vp]
         xb[k] = 0

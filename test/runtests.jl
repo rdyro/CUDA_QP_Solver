@@ -14,7 +14,7 @@ function test_mergesort(N)
   @assert N >= 50
   iwork = zeros(N)
   a = rand(1:100, N)
-  lo = rand(10:N - 20)
+  lo = rand(10:N-20)
   hi = rand(lo+1:N-10)
   al, ah = copy(a[1:lo-1]), copy(a[hi+1:end])
   a_ = copy(a)

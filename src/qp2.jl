@@ -37,8 +37,9 @@ function QP_solve!(sol, n, m, Pp, Pi, Px, q, Ap, Ai, Ax, b, l, u, iwork, fwork)
     Ix[i] = sig
   end
   sphcat!(Hp, Hi, Hx, Ap, Ai, Ax, Ip, Ii, Ix)
-  Hp_, Hi_, Hx_ = view(Hp, 1:n+m+1), view(Hi, 1:Annz+m), view(Hx, 1:Annz+m)
-  sptranspose!(ATp, ATi, ATx, Hp_, Hi_, Hx_)
+  #Hp_, Hi_, Hx_ = view(Hp, 1:n+m+1), view(Hi, 1:Annz+m), view(Hx, 1:Annz+m)
+  #sptranspose!(ATp, ATi, ATx, Hp_, Hi_, Hx_)
+  sptranspose!(ATp, ATi, ATx, Hp, Hi, Hx)
 
   spcopy!(Hp, Hi, Hx, Pp, Pi, Px)
   Hnnz = Hp[n+1] - 1
@@ -101,9 +102,10 @@ function QP_solve!(sol, n, m, Pp, Pi, Px, q, Ap, Ai, Ax, b, l, u, iwork, fwork)
     vecadd!(y, view(sol, 1:n))
     vecsub!(y, z)
 
-    #veccpy!(res, view(sol, 1:n))
-    #vecsub!(res, z)
-    #norm = vecdot(res, res)
+    veccpy!(res, view(sol, 1:n))
+    vecsub!(res, z)
+    norm = vecdot(res, res)
+    println(norm)
   end
   return
 end

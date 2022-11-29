@@ -2,7 +2,7 @@ using LinearAlgebra, SparseArrays
 
 ################################################################################
 import SparseArrays.sparse
-function sparse(A::AbstractArray{T}, keepzeros) where T <: Number
+function sparse(A::AbstractArray{T}, keepzeros) where {T<:Number}
   if keepzeros == false
     return sparse(A)
   else
@@ -16,9 +16,14 @@ function construct_Ab(f, fx, fu)
   @assert length(f) == length(fx) == length(fu) > 0
   N, xdim, udim = length(f), size(fx[1], 2), size(fu[1], 2)
   fx_, fu_ = sparse.(fx, true), sparse.(fu, true)
-  Ax = add(sparse(-I, N * xdim, N * xdim), 
-           hcat(vcat(spzeros(xdim, (N - 1) * xdim), blockdiag(fx_[2:end]...)),
-                spzeros(xdim * N, xdim)), true)
+  Ax = add(
+    sparse(-I, N * xdim, N * xdim),
+    hcat(
+      vcat(spzeros(xdim, (N - 1) * xdim), blockdiag(fx_[2:end]...)),
+      spzeros(xdim * N, xdim),
+    ),
+    true,
+  )
   Au = blockdiag(fu_...)
   b = -vcat(f...)
 
@@ -60,7 +65,7 @@ function construct_Ab!(Ap, Ai, Ax, b, f, fx, fu)
       for k in 1:xdim
         l += 1
         Ai[l] = (i - 1) * xdim + xdim + k
-        Ax[l] = fx[k, j, i + 1]
+        Ax[l] = fx[k, j, i+1]
       end
     end
   end
@@ -72,7 +77,7 @@ function construct_Ab!(Ap, Ai, Ax, b, f, fx, fu)
 
   for i in 1:N
     for j in 1:xdim
-      b[xdim * (i - 1) + j] = -f[j, i]
+      b[xdim*(i-1)+j] = -f[j, i]
     end
   end
   return
