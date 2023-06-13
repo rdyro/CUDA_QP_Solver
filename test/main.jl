@@ -1,7 +1,7 @@
 using LinearAlgebra, SparseArrays, BenchmarkTools
 using PyPlot, Printf
 using CUDA, OSQP
-using Infiltrator, Profile, ProfileView
+#using Infiltrator, Profile, ProfileView
 CUDA.allowscalar(false)
 
 include(abspath(joinpath(@__DIR__, "..", "src", "vec.jl")))
@@ -41,7 +41,8 @@ function solve_routine(P, q, A, l, u; device = "cuda")
         #CUDA.@sync @cuda threads = 1 blocks = 1 QP_solve!(args...)
         config = launch_configuration(kernel.fun)
         begin
-          secs = CUDA.@elapsed kernel(args...; threads=1, blocks=1)
+          CUDA.@profile kernel(args...; threads=1, blocks=1)
+          secs = kernel(args...; threads=1, blocks=1)
           println(secs)
         end
         #CUDA.@sync @cuda threads = 1 blocks = 1 QP_solve!(args...)
@@ -54,11 +55,12 @@ function solve_routine(P, q, A, l, u; device = "cuda")
     @time QP_solve!(args...)
     @time QP_solve!(args...)
     @time QP_solve!(args...)
-    Profile.clear()
-    @profile for i in 1:10
+    #Profile.clear()
+    #@profile for i in 1:10
+    for i in 1:10
       QP_solve!(args...)
     end
-    ProfileView.view()
+    #ProfileView.view()
   end
   return sol
 end
