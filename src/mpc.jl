@@ -26,7 +26,6 @@ function construct_Ab(f, fx, fu)
   )
   Au = blockdiag(fu_...)
   b = -vcat(f...)
-
   return Ax, Au, b
 end
 

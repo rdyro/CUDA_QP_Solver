@@ -9,7 +9,7 @@ include(abspath(joinpath(@__DIR__, "..", "src", "sputils.jl")))
 include(abspath(joinpath(@__DIR__, "..", "src", "gpu_sparse.jl")))
 include(abspath(joinpath(@__DIR__, "..", "src", "mpc.jl")))
 include(abspath(joinpath(@__DIR__, "..", "src", "ldlt.jl")))
-include(abspath(joinpath(@__DIR__, "..", "src", "qp5.jl")))
+include(abspath(joinpath(@__DIR__, "..", "src", "qp.jl")))
 
 ################################################################################
 unwrap(A) = (A.colptr, A.rowval, A.nzval)

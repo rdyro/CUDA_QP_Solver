@@ -1,54 +1,52 @@
 ################################################################################
-function QP_solve!(sol, n, m, Pp, Pi, Px, q, Ap, Ai, Ax, b, l, u, iwork, fwork)
+function QP_solve!(sol, n, m, Pp, Pi, Px, q, Ap, Ai, Ax, l, u, iwork, fwork)
   #(threadIdx().x != 1 || blockIdx().x != 1) && (return)
+  
+  # allocate working memory for temporary matrices #############################
   Pnnz, Annz = length(Pi), length(Ai)
-  Hnnz = Pnnz + 5 * Annz + m
+  Hnnz = Pnnz + 5 * Annz + m + n
+
+  ATp, iwork = @view_mem(iwork, m + 1)
+  ATi, iwork = @view_mem(iwork, Annz)
+  ATx, fwork = @view_mem(fwork, Annz)
+
+  rho0, sig = 1.0f1, 1.0f-12
 
   Hp, iwork = @view_mem(iwork, n + m + 1)
   Hi, iwork = @view_mem(iwork, Hnnz)
-  ATp, iwork = @view_mem(iwork, m + 1)
-  ATi, iwork = @view_mem(iwork, Annz + m)
-  ATAp, iwork = @view_mem(iwork, n + 1)
-  ATAi, iwork = @view_mem(iwork, 5 * Annz)
+  Hx, fwork = @view_mem(fwork, Hnnz)
+
   Lnz, iwork = @view_mem(iwork, n + m)
   info, iwork = @view_mem(iwork, 1)
   etree, iwork = @view_mem(iwork, n + m)
   ldlt_iwork, iwork = @view_mem(iwork, 30 * (n + m))
-
-  Hx, fwork = @view_mem(fwork, Hnnz)
-  ATx, fwork = @view_mem(fwork, Annz + m)
-  ATAx, fwork = @view_mem(fwork, 5 * Annz)
-  x, fwork = @view_mem(fwork, n)
-  xp, fwork = @view_mem(fwork, n)
-  y, fwork = @view_mem(fwork, n)
-  yp, fwork = @view_mem(fwork, n)
-  z, fwork = @view_mem(fwork, n)
-  zp, fwork = @view_mem(fwork, n)
-  v, fwork = @view_mem(fwork, n)
   ldlt_fwork, fwork = @view_mem(fwork, 10 * (n + m))
 
-  rho, sig = 1e1, 1e-7
-  Ip, Ii = view(ldlt_iwork, 1:m+1), view(ldlt_iwork, m+1+1:m+1+m)
-  Ix = view(ldlt_fwork, 1:m)
-  Ip[1] = 1
-  for i in 1:m
-    Ip[i+1] = i + 1
-    Ii[i] = i
-    Ix[i] = sig
+  # create an identity matrix ##################################################
+  Ip, iwork = @view_mem(iwork, n + m + 1)
+  Ii, iwork = @view_mem(iwork, n + m)
+  Ix, fwork = @view_mem(fwork, n + m)
+  for i in 1:n
+    Ip[i], Ii[i], Ix[i] = i, i, sig
   end
-  sphcat!(Hp, Hi, Hx, Ap, Ai, Ax, Ip, Ii, Ix)
-  Hp_, Hi_, Hx_ = view(Hp, 1:n+m+1), view(Hi, 1:Annz+m), view(Hx, 1:Annz+m)
-  sptranspose!(ATp, ATi, ATx, Hp_, Hi_, Hx_)
+  for i in 1:m
+    Ip[n+i], Ii[n+i], Ix[n+i] = i + n, i + n, -1.0f0 / rho0
+  end
+  Ip[n+m+1] = n + m + 1
 
-  spcopy!(Hp, Hi, Hx, Pp, Pi, Px)
-  Hnnz = Hp[n+1] - 1
+  # allocate the temporary matrix for combined hessian matrix ###################
+  Tp, iwork = @view_mem(iwork, n + m + 1)
+  Ti, iwork = @view_mem(iwork, Hnnz)
+  Tx, fwork = @view_mem(fwork, Hnnz)
+
+  sptranspose!(ATp, ATi, ATx, Ap, Ai, Ax)
+  sphcat!(Tp, Ti, Tx, Pp, Pi, Px, ATp, ATi, ATx)
+  Ti = view(Ti, 1:Tp[n+m+1]-1)
+  Tx = view(Tx, 1:Tp[n+m+1]-1)
+  spmatadd!(Hp, Hi, Hx, Tp, Ti, Tx, Ip, Ii, Ix)
   sptriu!(Hp, Hi, Hx)
-  Hp_, Hi_, Hx_ = view(Hp, 1:n+1), view(Hi, 1:Hnnz), view(Hx, 1:Hnnz)
-  sphcat!(Hp, Hi, Hx, Hp_, Hi_, Hx_, ATp, ATi, ATx)
-  Hnnz = Hp[n+m+1] - 1
-  spdiagadd!(Hp, Hi, Hx, 1, n, sig)
-  spdiagadd!(Hp, Hi, Hx, 1, n, rho)
 
+  # allocate and compute the LDLT factorization ################################
   LDLT_etree!(n + m, Hp, Hi, ldlt_iwork, Lnz, info, etree)
   @assert info[1] > 0
   Lnnz = info[1]
@@ -78,32 +76,72 @@ function QP_solve!(sol, n, m, Pp, Pi, Px, q, Ap, Ai, Ax, b, l, u, iwork, fwork)
   )
   @assert info[1] > 0
 
-  vecfill!(z, 0.0)
-  vecfill!(zp, 0.0)
-  vecfill!(y, 0.0)
-  vecfill!(yp, 0.0)
-  vecfill!(x, 0.0)
-  vecfill!(xp, 0.0)
-  res = view(ldlt_fwork, 1:n)
-  for k in 1:100
-    vecfill!(sol, 0.0)
-    vecsub!(sol, y)
-    vecadd!(sol, z)
-    vecscal!(sol, rho)
-    vecsub!(sol, q)
-    veccpy!(view(sol, n+1:n+m), b)
+  # allocate the ADMM variables ###############################################
+  temp, fwork = @view_mem(fwork, n + m)
+  x, fwork = @view_mem(fwork, n)
+  z, fwork = @view_mem(fwork, m)
+  zproj, fwork = @view_mem(fwork, m)
+  y, fwork = @view_mem(fwork, m)
+  v, fwork = @view_mem(fwork, m)
+  temp_x, fwork = @view_mem(fwork, n)
+  temp_x2, fwork = @view_mem(fwork, n)
 
-    LDLT_solve!(n + m, Lp, Li, Lx, Dinv, sol)
-    veccpy!(z, view(sol, 1:n))
-    vecadd!(z, y)
+  # solve in a loop for a fixed number of iterations ##########################
+  for i in 1:50
+    # x = [sig * x - q z - y ./ rho0]
+    for i in 1:n
+      temp[i] = sig * x[i] - q[i]
+    end
+    for i in 1:m
+      temp[n+i] = z[i] - y[i] / rho0
+    end
 
-    vecclamp!(z, z, l, u)
-    vecadd!(y, view(sol, 1:n))
-    vecsub!(y, z)
+    # LDLT_solve!(n + m, Lp, Li, Lx, Dinv, x)
+    LDLT_solve!(n + m, Lp, Li, Lx, Dinv, temp)
 
-    #veccpy!(res, view(sol, 1:n))
-    #vecsub!(res, z)
-    #norm = vecdot(res, res)
+    # x, v = x[1:n], x[n+1:end]
+    veccpy!(x, view(temp, 1:n))
+    veccpy!(v, view(temp, n+1:n+m))
+
+    # z = z + (v - y) ./ rho0
+    for i in 1:m
+      z[i] += (v[i] - y[i]) / rho0
+    end
+
+    # zproj = clamp.(z + y ./ rho0, l, u)
+    for i in 1:m
+      zproj[i] = z[i] + y[i] / rho0
+    end
+    vecclamp!(zproj, zproj, l, u)
+
+    # y = y + rho .* (z - zclamped)
+    for i in 1:m
+      y[i] += rho0 * (z[i] - zproj[i])
+    end
+
+    # debug purposes: compute residuals ###########################
+    #rp = 0f0
+    #for i in 1:n
+    #  rp += (z[i] - zproj[i])^2
+    #end
+    #rp = sqrt(rp)
+
+    ##spmul!(temp_x, Pp, Pi, Px, x)
+    ##spmul!(temp_x2, ATp, ATi, ATx, y)
+    #rd = 0f0
+    #for i in 1:n
+    #  rd += (temp_x[i] + q[i] + temp_x2[i])^2
+    #end
+    #rd = sqrt(rd)
+    #  # (debug) && (@printf("%9.4e - %9.4e\n", rp, rd))
+
+    #  # z = zproj
+    #  veccpy!(z, zproj)
   end
+
+  # copy the result into the solution vector ###################################
+  veccpy!(view(sol, 1:n), x)
+  veccpy!(view(sol, n+1:n+m), y)
+
   return
 end

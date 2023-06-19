@@ -12,7 +12,7 @@ function LDLT_etree!(n, Ap, Ai, iwork, Lnz, info, etree)
 
     # Abort if A doesn't have at least one entry one entry in every column
     if Ap[i] == Ap[i+1]
-      info[1] = -1
+      info[1] = -2
       return
     end
   end
@@ -46,12 +46,8 @@ end
 
 function LDLT_factor!(
   n,
-  Ap,
-  Ai,
-  Ax,
-  Lp,
-  Li,
-  Lx,
+  A,
+  L,
   D,
   Dinv,
   info,
@@ -61,6 +57,8 @@ function LDLT_factor!(
   fwork,
   logicalFactor,
 )
+  Ap, Ai, Ax = A
+  Lp, Li, Lx = L
   positiveValuesInD = 0
 
   #partition working memory into pieces
@@ -218,20 +216,20 @@ function LDLT_factor!(
 end
 
 # Solves (L+I)x = b, with x replacing b
-function LDLT_Lsolve!(n, Lp, Li, Lx, x)
-  for i in 1:n  #= @inbounds =#
-    for j in Lp[i]:Lp[i+1]-1    #= @inbounds =#
-      x[Li[j]] -= Lx[j] * x[i]
+@inline function LDLT_Lsolve!(n, Lp, Li, Lx, x)
+  for i in 1:n
+    @bounds for j in Lp[i]:Lp[i+1]-1
+      @bounds x[Li[j]] -= Lx[j] * x[i]
     end
   end
   return
 end
 
 # Solves (L+I)'x = b, with x replacing b
-function LDLT_LTsolve!(n, Lp, Li, Lx, x)
-  for i in n:-1:1  #= @inbounds =#
-    for j in Lp[i]:Lp[i+1]-1    #= @inbounds =#
-      x[i] -= Lx[j] * x[Li[j]]
+@inline function LDLT_LTsolve!(n, Lp, Li, Lx, x)
+  for i in n:-1:1
+    @bounds for j in Lp[i]:Lp[i+1]-1
+      @bounds x[i] -= Lx[j] * x[Li[j]]
     end
   end
   return
@@ -239,10 +237,10 @@ end
 
 # Solves Ax = b where A has given LDL factors,
 # with x replacing b
-function LDLT_solve!(n, Lp, Li, Lx, Dinv, b)
+@inline function LDLT_solve!(n, Lp, Li, Lx, Dinv, b)
   LDLT_Lsolve!(n, Lp, Li, Lx, b)
-  for i in 1:n  #= @inbounds =#
-    b[i] = b[i] * Dinv[i]
+  @simd for i in 1:n
+    @bounds b[i] = b[i] * Dinv[i]
   end
   LDLT_LTsolve!(n, Lp, Li, Lx, b)
   return
