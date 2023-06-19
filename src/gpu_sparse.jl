@@ -1,5 +1,3 @@
-include("vec.jl")
-
 # Utils ########################################################################
 @inline function binary_search(a, i)
   if a[end] < i || a[1] > i
@@ -315,7 +313,7 @@ function spmatmul!(Cp, Ci, Cx, mA, Ap, Ai, Ax, Bp, Bi, Bx, iwork)
 
   ip = 1
   for i in 1:nB
-    @assert ip + mA - 1 <= nnzC
+    @cuassert ip + mA - 1 <= nnzC
     Cp[i] = ip
     ip = spcolmul!(Ci, Cx, xb, i, ip, mA, Ap, Ai, Ax, Bp, Bi, Bx, sort_iwork)
   end

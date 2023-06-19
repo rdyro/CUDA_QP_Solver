@@ -1,121 +1,88 @@
-using CUDA, Infiltrator
-
-function test_kernel(data, n)
+function QP_solve!(sol, n, m, P_, q_, A_, l_, u_)
   #(threadIdx().x != 1 || blockIdx().x != 1) && (return)
 
-  iwork = CUDA.@cuStaticSharedMem(Int32, 10000)
-  fwork = CUDA.@cuStaticSharedMem(Float32, 10000)
-  a, fwork = view_mem(fwork, len32(data))
-  b, fwork = view_mem(fwork, len32(data))
-  c, fwork = view_mem(fwork, len32(data))
-  d, fwork = view_mem(fwork, len32(data))
-  e, fwork = view_mem(fwork, n)
-
-  for i in 1:len32(data)
-    #a[i] = data[i]
-    b[i] = 1.0 * i
-    c[i] = 1.0 * i
-    d[i] = 1.0 * 2
-  end
-  for i in 1:len32(data)
-    #data[i] = a[i] * b[i]
-    data[i] = b[i] * b[i] - c[i]
-  end
-  data[end] = len32(fwork)
-  return nothing
-end
-
-const S = 1000
-
-@inline function has_empty(Ap)
-  any_same = false
-  for i in 1:(len32(Ap) - Int32(1))
-    any_same |= (Ap[i] == Ap[i+1])
-  end
-  return any_same
-end
-
-####################################################################################################
-
-
-#function QP_solve!(sol, n, m, Pp, Pi, Px, q, Ap, Ai, Ax, l, u)
-function QP_solve!(sol, n, m, P, q, A, l, u)
-  #(threadIdx().x != 1 || blockIdx().x != 1) && (return)
-
-  a = CuDynamicSharedArray(Int32, 10)
-  b = view(a, 1:Int32(5))
+  imem, fmem = view(sol, 1:5), view(sol, 6:10)
 
   iwork = make_mem(CuDynamicSharedArray(Int32, 2^12))
   fwork = make_mem(CuDynamicSharedArray(Float32, 2^12, 4 * length(iwork)))
 
-  Pp, Pi, Px = P
-  Ap, Ai, Ax = A
-
   # allocate working memory for temporary matrices #############################
-  Pnnz, Annz = len32(Pi), len32(Ai)
-  Hnnz = Int32(Pnnz + 5 * Annz + m + n)
+  #Pnnz, Annz = len32(P_[2]), len32(A_[2])
+  Pnnz, Annz = len32(P_[2]), len32(A_[2])
 
+  AT = (alloc_mem!(iwork, m + 1), alloc_mem!(iwork, Annz), alloc_mem!(fwork, Annz)) # alloc AT
+
+  #P = (alloc_mem!(iwork, n + 1), alloc_mem!(iwork, Pnnz), alloc_mem!(fwork, Pnnz)) # alloc P
+  #A = (alloc_mem!(iwork, n + 1), alloc_mem!(iwork, Annz), alloc_mem!(fwork, Annz)) # alloc A
+  #veccpy!(P[1], P_[1]), veccpy!(P[2], P_[2]), veccpy!(P[3], P_[3])
+  #veccpy!(A[1], A_[1]), veccpy!(A[2], A_[2]), veccpy!(A[3], A_[3])
+  P, A = P_, A_
+
+  imem[1], fmem[1] = 2^12 - length(iwork), 2^12 - length(fwork) # save remaining memory
+  sptranspose!(AT..., A...)
+  #free_mem!(fwork, Annz), free_mem!(iwork, Annz), free_mem!(iwork, m + 1) # free A
+
+  sptriu!(P...)
+  P = trim_spmat(P...)
+  Pnnz = len32(P[2])
+  Hnnz = Int32(Pnnz + Annz + m + n)
+
+  q, l, u = alloc_mem!(fwork, n), alloc_mem!(fwork, m), alloc_mem!(fwork, m)
+  veccpy!(q, q_), veccpy!(l, l_), veccpy!(u, u_)
   ##################################################################################################
 
-  ATi = alloc_mem!(iwork, Annz)
-  ATx = alloc_mem!(fwork, Annz)
-  ATp = alloc_mem!(iwork, m + 1)
+  rho0, sig = 1.0f1, 1.0f-4
 
-  rho0, sig = 1.0f1, 1.0f-12
+  H = (alloc_mem!(iwork, n + m + 1), alloc_mem!(iwork, Hnnz), alloc_mem!(fwork, Hnnz)) # alloc H
 
-  Hi = alloc_mem!(iwork, Hnnz)
-  Hx = alloc_mem!(fwork, Hnnz)
-  Hp = alloc_mem!(iwork, n + m + 1)
+  # create an identity matrix ##################################################
+  I = (alloc_mem!(iwork, n + m + 1), alloc_mem!(iwork, n + m), alloc_mem!(fwork, n + m)) # alloc I
+
+  @simd for i in 1:n
+    @cinbounds I[1][i], I[2][i], I[3][i] = i, i, sig
+  end
+  @simd for i in 1:m
+    @cinbounds I[1][n+i], I[2][n+i], I[3][n+i] = i + n, i + n, -1.0f0 / rho0
+  end
+  @cinbounds I[1][n+m+1] = n + m + 1
+
+  # allocate the temporary matrix for combined hessian matrix ###################
+  T = (alloc_mem!(iwork, n + m + 1), alloc_mem!(iwork, Hnnz), alloc_mem!(fwork, Hnnz)) # alloc T
+
+  sphcat!(T..., P..., AT...)
+  T = trim_spmat(T...)
+  spmatadd!(H..., T..., I...)
+  imem[2], fmem[2] = 2^12 - length(iwork), 2^12 - length(fwork) # save remaining memory
+  free_mem!(iwork, n + m + 1), free_mem!(iwork, Hnnz), free_mem!(fwork, Hnnz) # free T
+  free_mem!(iwork, n + m + 1), free_mem!(iwork, n + m), free_mem!(fwork, n + m) # free I
+  imem[3], fmem[3] = 2^12 - length(iwork), 2^12 - length(fwork) # save remaining memory
+  H = trim_spmat(H...)
+
+  # allocate and compute the LDLT factorization ################################
 
   Lnz = alloc_mem!(iwork, n + m)
   info = alloc_mem!(iwork, 1)
   etree = alloc_mem!(iwork, n + m)
-  #ldlt_iwork = alloc_mem!(iwork, 30 * (n + m))
-  #ldlt_fwork = alloc_mem!(fwork, 10 * (n + m))
-  ldlt_iwork = alloc_mem!(iwork, 4 * (n + m))
-  ldlt_fwork = alloc_mem!(fwork, 2 * (n + m))
+  etree_iwork = alloc_mem!(iwork, n + m) # alloc etree_iwork
+  
+  LDLT_etree!(n + m, H[1:2]..., etree_iwork, Lnz, info, etree)
+  free_mem!(iwork, n + m) # free etree_iwork
 
-  # create an identity matrix ##################################################
-  Ip = alloc_mem!(iwork, n + m + 1)
-  Ii = alloc_mem!(iwork, n + m)
-  Ix = alloc_mem!(fwork, n + m)
-
-  for i in 1:n
-    Ip[i], Ii[i], Ix[i] = i, i, sig
-  end
-  for i in 1:m
-    Ip[n+i], Ii[n+i], Ix[n+i] = i + n, i + n, -1.0f0 / rho0
-  end
-  Ip[n+m+1] = n + m + 1
-
-  # allocate the temporary matrix for combined hessian matrix ###################
-  Tp = alloc_mem!(iwork, n + m + 1)
-  Ti = alloc_mem!(iwork, Hnnz)
-  Tx = alloc_mem!(fwork, Hnnz)
-
-  sptranspose!(ATp, ATi, ATx, Ap, Ai, Ax)
-  sphcat!(Tp, Ti, Tx, Pp, Pi, Px, ATp, ATi, ATx)
-  Ti = view(Ti, 1:Tp[n+m+1]-1)
-  Tx = view(Tx, 1:Tp[n+m+1]-1)
-  spmatadd!(Hp, Hi, Hx, Tp, Ti, Tx, Ip, Ii, Ix)
-  Hi, Hx = view(Hi, 1:Hp[end]-1), view(Hx, 1:Hp[end]-1)
-  sptriu!(Hp, Hi, Hx)
-
-  # allocate and compute the LDLT factorization ################################
-  LDLT_etree!(n + m, Hp, Hi, ldlt_iwork, Lnz, info, etree)
-
-  #@cuassert info[1] > 0
+  @cuassert info[1] > 0
   Lnnz = info[1]
 
-  Lp = alloc_mem!(iwork, n + m + 1)
-  Li = alloc_mem!(iwork, Lnnz)
-  D = alloc_mem!(fwork, n + m)
-  Dinv = alloc_mem!(fwork, n + m)
-  Lx = alloc_mem!(fwork, Lnnz)
+  L = alloc_mem!(iwork, n + m + 1), alloc_mem!(iwork, Lnnz), alloc_mem!(fwork, Lnnz) # alloc L
+  D, Dinv = alloc_mem!(fwork, n + m), alloc_mem!(fwork, n + m) # alloc D, Dinv
 
-  LDLT_factor!(n + m, (Hp, Hi, Hx), (Lp, Li, Lx), D, Dinv, info, Lnz, etree, ldlt_iwork, ldlt_fwork, false)
-  @assert info[1] > 0
+  ldlt_iwork = alloc_mem!(iwork, 4 * (n + m)) # alloc ldlt_iwork
+  ldlt_fwork = alloc_mem!(fwork, 2 * (n + m)) # alloc ldlt_fwork
+  imem[4], fmem[4] = 2^12 - length(iwork), 2^12 - length(fwork) # save remaining memory
 
+  #LDLT_factor!(n + m, (Hp, Hi, Hx), (Lp, Li, Lx), D, Dinv, info, Lnz, etree, ldlt_iwork, ldlt_fwork, false)
+  LDLT_factor!(n + m, H, L, D, Dinv, info, Lnz, etree, ldlt_iwork, ldlt_fwork, false)
+  free_mem!(iwork, 4 * (n + m)) # free ldlt_iwork
+  free_mem!(fwork, 2 * (n + m)) # free ldlt_fwork
+  @cuassert info[1] > 0
 
   # allocate the ADMM variables ###############################################
   temp = alloc_mem!(fwork, n + m)
@@ -124,38 +91,38 @@ function QP_solve!(sol, n, m, P, q, A, l, u)
   zproj = alloc_mem!(fwork, m)
   y = alloc_mem!(fwork, m)
   v = alloc_mem!(fwork, m)
+  imem[5], fmem[5] = 2^12 - length(iwork), 2^12 - length(fwork) # save remaining memory
 
   # solve in a loop for a fixed number of iterations ##########################
   for i in 1:200
     # x = [sig * x - q z - y ./ rho0]
     @simd for i in 1:n
-      @bounds temp[i] = sig * x[i] - q[i]
+      @cinbounds temp[i] = sig * x[i] - q[i]
     end
     @simd for i in 1:m
-      @bounds temp[n+i] = z[i] - y[i] / rho0
+      @cinbounds temp[n+i] = z[i] - y[i] / rho0
     end
 
     # LDLT_solve!(n + m, Lp, Li, Lx, Dinv, x)
-    LDLT_solve!(n + m, Lp, Li, Lx, Dinv, temp)
+    LDLT_solve!(n + m, L..., Dinv, temp)
 
     # x, v = x[1:n], x[n+1:end]
-    veccpy!(x, view(temp, 1:n))
-    veccpy!(v, view(temp, n+1:n+m))
+    veccpy!(x, view(temp, 1:n)), veccpy!(v, view(temp, n+1:n+m))
 
     # z = z + (v - y) ./ rho0
     @simd for i in 1:m
-      @bounds z[i] += (v[i] - y[i]) / rho0
+      @cinbounds z[i] += (v[i] - y[i]) / rho0
     end
 
     # zproj = clamp.(z + y ./ rho0, l, u)
     @simd for i in 1:m
-      @bounds zproj[i] = z[i] + y[i] / rho0
+      @cinbounds zproj[i] = z[i] + y[i] / rho0
     end
     vecclamp!(zproj, zproj, l, u)
 
     # y = y + rho .* (z - zclamped)
     @simd for i in 1:m
-      @bounds y[i] += rho0 * (z[i] - zproj[i])
+      @cinbounds y[i] += rho0 * (z[i] - zproj[i])
     end
 
     # debug purposes: compute residuals ###########################
@@ -179,8 +146,18 @@ function QP_solve!(sol, n, m, P, q, A, l, u)
   end
 
   # copy the result into the solution vector ###################################
-  veccpy!(view(sol, 1:n), x)
-  veccpy!(view(sol, n+1:n+m), y)
+
+  if true
+    max_imem, max_fmem = 0, 0
+    for i in 1:5
+      @cuprintf("(%04d, %04d)\n", Int32(imem[i]), Int32(fmem[i]))
+      max_imem = max(max_imem, imem[i])
+      max_fmem = max(max_fmem, fmem[i])
+    end
+    @cuprintf("\nmax = (%04d, %04d)\n\n", Int32(max_imem), Int32(max_fmem))
+  end
+
+  veccpy!(view(sol, 1:n), x), veccpy!(view(sol, n+1:n+m), y)
 
   #@cuprintf("length(iwork) = %d\n", len32(iwork)))
   #@cuprintf("length(fwork) = %d\n", len32(fwork)))

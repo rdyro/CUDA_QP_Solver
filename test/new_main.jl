@@ -1,8 +1,10 @@
 using LinearAlgebra, SparseArrays, BenchmarkTools
 using PyPlot, Printf, JuMP, OSQP
-using CUDA, OSQP, Cthulhu
+using CUDA, OSQP, Cthulhu, Infiltrator
 #using Infiltrator, Profile, ProfileView
 CUDA.allowscalar(false)
+BenchmarkTools.DEFAULT_PARAMETERS.samples = 20
+BenchmarkTools.DEFAULT_PARAMETERS.seconds = 1
 
 include(abspath(joinpath(@__DIR__, "..", "src", "vec.jl")))
 include(abspath(joinpath(@__DIR__, "..", "src", "sputils.jl")))
@@ -16,7 +18,7 @@ sparseunwrap(A) = (A.colptr, A.rowval, A.nzval)
 ################################################################################
 
 # make the system #################
-N, XDIM, UDIM = 10, 2, 1
+N, XDIM, UDIM = 20, 2, 1
 
 function solve_routine(P, q, A, l, u)
   n, m = length(q), length(l)
@@ -37,7 +39,7 @@ function solve_routine(P, q, A, l, u)
   #args = (sol, n, m, Pp, Pi, Px, q, Ap, Ai, Ax, l, u)
   #args = (sol, n, m, P, q, A, l, u)
   args = (sol, n, m, (Pp, Pi, Px), q, (Ap, Ai, Ax), l, u)
-  display(@benchmark CUDA.@sync @cuda threads=1 blocks=1 shmem=2^15 QP_solve!($args...))
+  #display(@benchmark CUDA.@sync @cuda threads=1 blocks=1 shmem=2^15 QP_solve!($args...))
   CUDA.@sync @cuda threads=1 blocks=1 shmem=2^15 QP_solve!(args...)
 
   # CPU ###################################################

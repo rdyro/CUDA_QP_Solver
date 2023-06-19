@@ -3,6 +3,8 @@ import Base: length
 #const WorkT = Tuple{AbstractVector{T}, AbstractVector{T}} where T
 #const Work = Array{AbstractVector{T}, 1} where T
 
+@inline trim_spmat(Ap, Ai, Ax) = (Ap, view(Ai, 1:Ap[end]-1), view(Ax, 1:Ap[end]-1))
+
 mutable struct Work{T}
   whole_buffer::CuDeviceVector{T, 3}
   remaining_buffer::SubArray{T, 1, CuDeviceVector{T, 3}, Tuple{UnitRange{Int64}}, true}
@@ -19,7 +21,7 @@ end
 
 """Partition a memory block into request size and rest."""
 @inline function view_mem(work, size)
-  @assert size <= len32(work)
+  @cuassert size <= len32(work)
   return view(work, 1:size), view(work, size+1:n)
 end
 
@@ -34,7 +36,7 @@ end
 
 """Allocate memory from a memory block tracking tuple."""
 @inline function alloc_mem!(work::Work{T}, size::Integer)::SubArray{T, 1, CuDeviceVector{T, 3}, Tuple{UnitRange{Int64}}, true} where T
-  @assert size <= len32(work.remaining_buffer)
+  @cuassert size <= len32(work.remaining_buffer)
   alloc_mem = view(work.remaining_buffer, 1:size)
   work.remaining_buffer = view(work.remaining_buffer, (size+1):len32(work.remaining_buffer))
   return alloc_mem
@@ -42,7 +44,7 @@ end
 
 """Free memory from a memory block tracking tuple."""
 @inline function free_mem!(work::Work{T}, size::Integer)::Nothing where T
-  @assert size <= len32(work.whole_buffer) - len32(work.remaining_buffer)
+  @cuassert size <= len32(work.whole_buffer) - len32(work.remaining_buffer)
   si = len32(work.whole_buffer) - len32(work.remaining_buffer) - size + 1
   ei = len32(work.whole_buffer)
   work.remaining_buffer = view(work.whole_buffer, si:ei)

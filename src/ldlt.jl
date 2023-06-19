@@ -17,15 +17,14 @@ function LDLT_etree!(n, Ap, Ai, iwork, Lnz, info, etree)
     end
   end
 
-  for j in 1:n  #= @inbounds =#
+  for j in 1:n
     iwork[j] = j
-    for p in Ap[j]:Ap[j+1]-1    #= @inbounds =#
+    for p in Ap[j]:Ap[j+1]-1
       i = Ai[p]
       if i > j
         info[1] = -1
         return
       end
-      ##= @inbounds =# while iwork[i] != j
       while iwork[i] != j
         if etree[i] == LDLT_UNKNOWN
           etree[i] = j
@@ -218,8 +217,8 @@ end
 # Solves (L+I)x = b, with x replacing b
 @inline function LDLT_Lsolve!(n, Lp, Li, Lx, x)
   for i in 1:n
-    @bounds for j in Lp[i]:Lp[i+1]-1
-      @bounds x[Li[j]] -= Lx[j] * x[i]
+    @cinbounds for j in Lp[i]:Lp[i+1]-1
+      @cinbounds x[Li[j]] -= Lx[j] * x[i]
     end
   end
   return
@@ -228,8 +227,8 @@ end
 # Solves (L+I)'x = b, with x replacing b
 @inline function LDLT_LTsolve!(n, Lp, Li, Lx, x)
   for i in n:-1:1
-    @bounds for j in Lp[i]:Lp[i+1]-1
-      @bounds x[i] -= Lx[j] * x[Li[j]]
+    @cinbounds for j in Lp[i]:Lp[i+1]-1
+      @cinbounds x[i] -= Lx[j] * x[Li[j]]
     end
   end
   return
@@ -240,7 +239,7 @@ end
 @inline function LDLT_solve!(n, Lp, Li, Lx, Dinv, b)
   LDLT_Lsolve!(n, Lp, Li, Lx, b)
   @simd for i in 1:n
-    @bounds b[i] = b[i] * Dinv[i]
+    @cinbounds b[i] = b[i] * Dinv[i]
   end
   LDLT_LTsolve!(n, Lp, Li, Lx, b)
   return
