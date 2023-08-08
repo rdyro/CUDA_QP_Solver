@@ -49,7 +49,8 @@ end
 
 @inline function vecclamp!(c, a, l, u)
   @simd for i in 1:length(a)
-    @cinbounds c[i] = a[i] >= u[i] ? u[i] : (a[i] <= l[i] ? l[i] : a[i])
+    #@cinbounds c[i] = a[i] >= u[i] ? u[i] : (a[i] <= l[i] ? l[i] : a[i])
+    @cinbounds c[i] = max(min(a[i], u[i]), l[i])
   end
   return
 end

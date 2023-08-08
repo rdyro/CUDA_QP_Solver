@@ -132,7 +132,7 @@ end
 
 function spmul!(y, Ap, Ai, Ax, x) # GPU ok
   n = length(Ap) - 1
-  vecfill!(y, 0f0)
+  vecfill!(y, 0.0f0)
   for j in 1:n  #= @inbounds =#
     for i in Ap[j]:Ap[j+1]-1    #= @inbounds =#
       y[Ai[i]] += Ax[i] * x[j]
@@ -175,8 +175,8 @@ function spmatadd!(Cp, Ci, Cx, Ap, Ai, Ax, Bp, Bi, Bx) # GPU ok
   return Cp, view(Ci, 1:l), view(Cx, 1:l)
 end
 
-@inline function spvecdot(Ai, Ax, Bi, Bx, check_only = false)
-  x, iszero = 0f0, true
+@inline function spvecdot(Ai, Ax, Bi, Bx, check_only=false)
+  x, iszero = 0.0f0, true
   i, j = 1, 1
   n, m = length(Ai), length(Bi)
   while i <= n && j <= m  #= @inbounds =#
@@ -188,7 +188,7 @@ end
     end
     if i <= n && j <= m && Ai[i] == Bi[j]
       if check_only
-        return 1f0, false
+        return 1.0f0, false
       end
       iszero = false
       x += Ax[i] * Bx[j]
@@ -250,22 +250,29 @@ function sphcat!(Cp, Ci, Cx, Ap, Ai, Ax, Bp, Bi, Bx)
 end
 
 # taken from Julia's stdlib/SparseArrays
-function sptranspose!(Xp, Xi, Xx, Ap, Ai, Ax)
+function sptranspose!(
+  Xp::ArrayView{T1},
+  Xi::ArrayView{T1},
+  Xx::ArrayView{T2},
+  Ap::ArrayView{T1},
+  Ai::ArrayView{T1},
+  Ax::ArrayView{T2},
+) where {T1,T2}
   n, nnz = length(Xp) - 1, length(Ai)
-  for i in 1:n+1  #= @inbounds =#
+  for i in 1:n+1
     Xp[i] = 0
   end
   Xp[1] = 1
-  for k in 1:nnz  #= @inbounds =#
+  for k in 1:nnz
     Xp[Ai[k]+1] += 1
   end
   countsum = 1
-  for k in 2:n+1  #= @inbounds =#
+  for k in 2:n+1
     overwritten = Xp[k]
     Xp[k] = countsum
     countsum += overwritten
   end
-  for i in 1:(length(Ap)-1)  #= @inbounds =#
+  for i in 1:(length(Ap)-1)
     for k in (Ap[i]):(Ap[i+1]-1)
       Xk = Xp[Ai[k]+1]
       Xi[Xk] = i
@@ -321,21 +328,7 @@ function spmatmul!(Cp, Ci, Cx, mA, Ap, Ai, Ax, Bp, Bi, Bx, iwork)
 end
 
 # process single rhs column
-@inline function spcolmul!(
-  Ci,
-  Cx,
-  xb,
-  i,
-  ip,
-  mA,
-  Ap,
-  Ai,
-  Ax,
-  Bp,
-  Bi,
-  Bx,
-  sort_iwork,
-)
+@inline function spcolmul!(Ci, Cx, xb, i, ip, mA, Ap, Ai, Ax, Bp, Bi, Bx, sort_iwork)
   ip0 = ip
   k0 = ip - 1
   for jp in (Bp[i]):(Bp[i+1]-1)
