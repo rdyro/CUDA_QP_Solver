@@ -54,4 +54,12 @@ end
   end
   return
 end
+
+@inline function vecpermute!(c, a, perm)
+  @simd for i in 1:length(a)
+    @cinbounds c[i] = a[perm[i]]
+  end
+  return
+end
+
 # Routines #####################################################################

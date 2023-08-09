@@ -1,3 +1,4 @@
+using CUDA
 
 speye(n) = sparse(I, n, n)
 
@@ -8,32 +9,38 @@ USE_SCORES = 2
 
 ####################################################################################################
 
-@inline function element2bit_idx(idx::T)::Tuple{T,T} where {T}
-  elem_idx = div(idx, sizeof(T) * 8) + 1
-  bit_idx = mod(idx, sizeof(T) * 8)
+const BIT_SIZE = 31
+
+function compute_n_bits(x)
+  return div(x, BIT_SIZE) + 1
+end
+
+@inline function element2bit_idx(idx)
+  elem_idx = div(idx, BIT_SIZE) + 1
+  bit_idx = mod(idx, BIT_SIZE)
   return (elem_idx, bit_idx)
 end
 
-@inline function check_and_set_neighbor!(set_work::Vec{T}, idx::T; mutate::Bool=true)::T where {T}
+@inline function check_and_set_neighbor!(set_work, idx; mutate=true)
   elem_idx, bit_idx = element2bit_idx(idx)
   @inbounds exists = ((set_work[elem_idx] & (1 << bit_idx)) != 0)
   (mutate) && (set_work[elem_idx] |= (1 << bit_idx))
   return exists ? 0 : 1
 end
 
-@inline function is_in_set(set_work::Vec{T}, idx::T)::Bool where {T}
+@inline function is_in_set(set_work, idx)
   elem_idx, bit_idx = element2bit_idx(idx)
   @inbounds exists = ((set_work[elem_idx] & (1 << bit_idx)) != 0)
   return exists
 end
 
-@inline function set_in_set!(set_work::Vec{T}, idx::T)::Nothing where {T}
+@inline function set_in_set!(set_work, idx)
   elem_idx, bit_idx = element2bit_idx(idx)
-  @inbounds set_work[elem_idx] |= (1 << bit_idx)
+  @inbounds set_work[elem_idx] |= UInt32(1 << bit_idx)
   return
 end
 
-@inline function clear_in_set!(set_work::Vec{T}, idx::T)::Nothing where {T}
+@inline function clear_in_set!(set_work, idx)
   elem_idx, bit_idx = element2bit_idx(idx)
   @inbounds set_work[elem_idx] &= ~T(1 << bit_idx)
   return
@@ -41,7 +48,7 @@ end
 
 ####################################################################################################
 
-@inline function get_neighbors(Ap::Vec{T}, Ai::Vec{T}, i::T) where {T}
+@inline function get_neighbors(Ap, Ai, i)
   @inbounds return @view Ai[Ap[i]:Ap[i+1]-1]
 end
 
@@ -63,17 +70,11 @@ end
 
 ####################################################################################################
 
-function vertex_weight_3depth(
-  Ap::Vec{T},
-  Ai::Vec{T},
-  is_enode_mask::Vec{T},
-  set_work::Vec{T},
-  v::Int,
-)::T where {T}
+function vertex_weight_3depth(Ap, Ai, is_enode_mask, set_work, v)
   weight = 0
   n = length(Ap) - 1
-  n_bits = div(n, sizeof(T) * 8) + 1
-  @simd for i in 1:n_bits
+  n_bits = div(n, BIT_SIZE) + 1
+  for i in 1:n_bits
     @inbounds set_work[i] = 0
   end
   for n1 in get_neighbors(Ap, Ai, v)
@@ -103,7 +104,7 @@ function vertex_weight_5depth(
 )::T where {T}
   weight = 0
   n = length(Ap) - 1
-  n_bits = div(n, sizeof(T) * 8) + 1
+  n_bits = div(n, BIT_SIZE) + 1
   @simd for i in 1:n_bits
     @inbounds set_work[i] = 0
   end
@@ -147,7 +148,7 @@ function vertex_weight_amd(
 )::T where {T}
   weight = 0
   n = length(Ap) - 1
-  n_bits = div(n, sizeof(T) * 8) + 1
+  n_bits = div(n, BIT_SIZE) + 1
   @simd for i in 1:n_bits
     @inbounds set_work[i] = 0
   end
@@ -177,7 +178,7 @@ function vertex_weight_exact(
 )::T where {T}
   weight = 0
   n = length(Ap) - 1
-  n_bits = div(n, sizeof(T) * 8) + 1
+  n_bits = div(n, BIT_SIZE) + 1
   @simd for i in 1:n_bits
     @inbounds neighbor_set[i] = 0
     @inbounds queue_set[i] = 0
@@ -208,7 +209,7 @@ end
 function compute_fillin(Ap::Vec{T}, Ai::Vec{T}, perm::Vec{T}, iwork::Vec{T}) where {T}
   @inbounds begin
     n = length(Ap) - 1
-    n_bits = div(n, sizeof(T) * 8) + 1
+    n_bits = div(n, BIT_SIZE) + 1
     @inbounds queue = @view iwork[1:n]
     @inbounds queue_set = @view iwork[n+1:n+n_bits]
     @inbounds is_enode_set = @view iwork[n+n_bits+1:n+2*n_bits]
@@ -236,14 +237,14 @@ function find_ordering(
   Ap::Vec{T},
   Ai::Vec{T},
   iwork::Vec{T};
-  method::Symbol=:depth3,
+  #method::Symbol=:depth3,
 )::Nothing where {T}
-  @assert method in (:depth3, :depth5, :amd, :frozen)
+  #@assert method in (:depth3, :depth5, :amd, :frozen)
 
   # initialize
   begin
     n = length(Ap) - 1
-    n_bits = div(n, sizeof(T) * 8) + 1
+    n_bits = div(n, BIT_SIZE) + 1
     # map working memory
     k = 0
     to_consider, k = (@view iwork[k+1:k+n]), k + n
@@ -274,13 +275,14 @@ function find_ordering(
       # update AMD weights 
       set_in_set!(is_enode_set, node_idx)
       for n in get_neighbors(Ap, Ai, node_idx)
-        if method == :depth3
-          @inbounds weights[n] = vertex_weight_3depth(Ap, Ai, is_enode_set, neighbor_set, n)
-        elseif method == :depth5
-          @inbounds weights[n] = vertex_weight_5depth(Ap, Ai, is_enode_set, neighbor_set, n)
-        elseif method == :amd
-          @inbounds weights[n] = vertex_weight_amd(Ap, Ai, weights, is_enode_set, neighbor_set, n)
-        end # else froze, do nothing
+        @inbounds weights[n] = vertex_weight_3depth(Ap, Ai, is_enode_set, neighbor_set, n)
+        #if method == :depth3
+        #  @inbounds weights[n] = vertex_weight_3depth(Ap, Ai, is_enode_set, neighbor_set, n)
+        #elseif method == :depth5
+        #  @inbounds weights[n] = vertex_weight_5depth(Ap, Ai, is_enode_set, neighbor_set, n)
+        #elseif method == :amd
+        #  @inbounds weights[n] = vertex_weight_amd(Ap, Ai, weights, is_enode_set, neighbor_set, n)
+        #end # else froze, do nothing
       end
       @inbounds to_consider[j_found] = to_consider[n-i+1]
       @inbounds to_consider[n-i+1] = node_idx
@@ -289,5 +291,5 @@ function find_ordering(
       @inbounds perm[i] = node_idx
     end
   end
-  return nothing
+  return
 end

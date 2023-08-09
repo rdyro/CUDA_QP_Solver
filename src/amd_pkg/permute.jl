@@ -1,15 +1,13 @@
 unpack_sparse_mat(A::SparseMatrixCSC) = (A.colptr, A.rowval, A.nzval)
 
-function permute_mat(P::SparseTuple, A::SparseTuple, perm::Vec, iwork::Vec)::Nothing
+function permute_mat(P::SparseTuple, A::SparseTuple, perm::Vec, iperm::Vec, iwork::Vec)::Nothing
   # make memory arrays from iwork ############################
   (Ap, Ai, Ax), (Pp, Pi, Px) = A, P
-  k = 0
-  iperm, k = view(iwork, k+1:k+length(perm)), k + length(perm)
-  sortwork, k = view(iwork, k+1:k+length(perm)), k + length(perm)
-  colperm, k = view(iwork, k+1:k+length(perm)), k + length(perm)
+  sortwork = view(iwork, 1:length(perm))
+  colperm = view(iwork, length(perm)+1:2*length(perm))
 
   # create the inverse permutation ###########################
-  mergeargsort!(iperm, perm, 1, length(perm), sortwork)
+  # mergeargsort!(iperm, perm, 1, length(perm), sortwork)
 
   n = size(Ap, 1) - 1
   Pp[1] = 1
