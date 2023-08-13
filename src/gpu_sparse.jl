@@ -251,13 +251,39 @@ end
 
 # taken from Julia's stdlib/SparseArrays
 function sptranspose!(
-  Xp::ArrayView{T1},
-  Xi::ArrayView{T1},
-  Xx::ArrayView{T2},
-  Ap::ArrayView{T1},
-  Ai::ArrayView{T1},
-  Ax::ArrayView{T2},
-) where {T1,T2}
+  Xp::CUDAArrayView{T1},
+  Xi::CUDAArrayView{T1},
+  Xx::CUDAArrayView{T2},
+  Ap::CUDAArrayView{T1},
+  Ai::CUDAArrayView{T1},
+  Ax::CUDAArrayView{T2},
+) where {T1,T2} # type annotated CUDA version for type stability
+  n, nnz = length(Xp) - 1, length(Ai)
+  for i in 1:n+1
+    Xp[i] = 0
+  end
+  Xp[1] = 1
+  for k in 1:nnz
+    Xp[Ai[k]+1] += 1
+  end
+  countsum = 1
+  for k in 2:n+1
+    overwritten = Xp[k]
+    Xp[k] = countsum
+    countsum += overwritten
+  end
+  for i in 1:(length(Ap)-1)
+    for k in (Ap[i]):(Ap[i+1]-1)
+      Xk = Xp[Ai[k]+1]
+      Xi[Xk] = i
+      Xx[Xk] = Ax[k]
+      Xp[Ai[k]+1] += 1
+    end
+  end
+  return
+end
+
+function sptranspose!(Xp, Xi, Xx, Ap, Ai, Ax) # CPU version without type annotations
   n, nnz = length(Xp) - 1, length(Ai)
   for i in 1:n+1
     Xp[i] = 0
@@ -305,7 +331,8 @@ end
 
 @inline nzrange_(Ap::Array, i) = (Ap[i]):(Ap[i+1]-1)
 
-function spmatmul!(Cp, Ci, Cx, mA, Ap, Ai, Ax, Bp, Bi, Bx, iwork)
+function spmatmul!(C, mA, A, B, iwork)
+  (Cp, Ci, Cx), (Ap, Ai, Ax), (Bp, Bi, Bx) = C, A, B
   nA, nB = length(Ap) - 1, length(Bp) - 1
   nnzA, nnzB = Ap[end] - 1, Bp[end] - 1
   nnzC = length(Cx)
@@ -325,6 +352,7 @@ function spmatmul!(Cp, Ci, Cx, mA, Ap, Ai, Ax, Bp, Bi, Bx, iwork)
     ip = spcolmul!(Ci, Cx, xb, i, ip, mA, Ap, Ai, Ax, Bp, Bi, Bx, sort_iwork)
   end
   Cp[nB+1] = ip
+  return
 end
 
 # process single rhs column

@@ -6,12 +6,14 @@ CUDA.allowscalar(false)
 BenchmarkTools.DEFAULT_PARAMETERS.samples = 100
 BenchmarkTools.DEFAULT_PARAMETERS.seconds = 5
 
-include(abspath(joinpath(@__DIR__, "..", "src", "vec.jl")))
-include(abspath(joinpath(@__DIR__, "..", "src", "sputils.jl")))
+include(abspath(joinpath(@__DIR__, "..", "src", "vec_utils.jl")))
+include(abspath(joinpath(@__DIR__, "..", "src", "mem_utils.jl")))
 include(abspath(joinpath(@__DIR__, "..", "src", "gpu_sparse.jl")))
+include(abspath(joinpath(@__DIR__, "..", "src", "admm_utils.jl")))
 include(abspath(joinpath(@__DIR__, "..", "src", "mpc.jl")))
 include(abspath(joinpath(@__DIR__, "..", "src", "ldlt.jl")))
-include(abspath(joinpath(@__DIR__, "..", "src", "qp_amd.jl")))
+include(abspath(joinpath(@__DIR__, "..", "src", "qp_cpu.jl")))
+include(abspath(joinpath(@__DIR__, "..", "src", "qp_cuda.jl")))
 include(abspath(joinpath(@__DIR__, "..", "src", "amd_pkg", "amd_pkg.jl")))
 
 ################################################################################
@@ -21,55 +23,96 @@ sparseunwrap(A) = (A.colptr, A.rowval, A.nzval)
 # make the system #################
 N, XDIM, UDIM = 37, 2, 1
 
-memory_mask = [zeros(Int32, 13); ones(Int32, 9)]
-eval(define_kernel(memory_mask))
-out = nothing
+config = Dict{Symbol,Int32}(
+  :mem_AT => 0,
+  :mem_A => 0,
+  :mem_P => 0,
+  :mem_q => 0,
+  :mem_lu => 0,
+  :mem_H => 0,
+  :mem_I => 0,
+  :mem_T => 0,
+  :mem_perm => 0,
+  :mem_perm_work => 0,
+  :mem_H_perm_work => 0,
+  :mem_H_perm => 0,
+  :mem_Lnz => 0,
+  :mem_etree => 0,
+  :mem_etree_iwork => 0,
+  :mem_ldlt_iwork => 0,
+  :mem_ldlt_fwork => 0,
+  :mem_L => 1,
+  :mem_D => 1,
+  :mem_temp => 1,
+  :mem_x => 1,
+  :mem_z => 1,
+  :mem_zproj => 1,
+  :mem_y => 1,
+  :mem_v => 1,
+  :use_amd => 1,
+)
+
+eval(define_kernel_cuda(config))
+eval(define_kernel_cpu(config))
+to_cuda(x) = eltype(x) <: AbstractFloat ? CuArray{Float32}(x) : CuArray{Int32}(x)
+to_cpu(x) = Array(x)
 
 function solve_routine(P, q, A, l, u)
   info = zeros(Int32, 3)
   n, m = length(q), length(l)
-  iwork, fwork = zeros(Int64, 10^6), zeros(Float64, 10^6)
+  iwork, fwork = zeros(Int32, 10^6), zeros(Float32, 10^6)
   Pp, Pi, Px = sparseunwrap(P)
   Ap, Ai, Ax = sparseunwrap(A)
 
   iters = 200
-  sol = CuArray{Float32}(zeros(n + m))
-  info = CuArray{Int32}(info)
-  Pp, Pi, Px = CuArray{Int32}(Pp), CuArray{Int32}(Pi), CuArray{Float32}(Px)
-  Ap, Ai, Ax = CuArray{Int32}(Ap), CuArray{Int32}(Ai), CuArray{Float32}(Ax)
-  q = CuArray{Float32}(q)
-  l, u = CuArray{Float32}(l), CuArray{Float32}(u)
-  iwork, fwork = CuArray{Int32}(iwork), CuArray{Float32}(fwork)
+  sol = zeros(n + m)
 
   # CUDA ##################################################
-  #args = (sol, n, m, Pp, Pi, Px, q, Ap, Ai, Ax, l, u)
-  #args = (sol, n, m, P, q, A, l, u)
+  vars = sol, info, Pp, Pi, Px, Ap, Ai, Ax, q, l, u, iwork, fwork
+  sol, info, Pp, Pi, Px, Ap, Ai, Ax, q, l, u, iwork, fwork = map(to_cuda, vars)
 
   args = (sol, info, iters, n, m, (Pp, Pi, Px), q, (Ap, Ai, Ax), l, u, iwork, fwork)
-  bench = @benchmark CUDA.@sync @cuda threads=1 blocks=1 shmem=2^15 QP_solve!($args...)
+  bench = @benchmark CUDA.@sync @cuda threads = 1 blocks = 1 shmem = 2^15 QP_solve_cuda!($args...)
   println("Times:")
   for t in bench.times
     println(t / 1e9)
   end
   println("Mean time: ", mean(bench.times) / 1e9)
-  CUDA.@sync @cuda threads = 1 blocks = 1 shmem = 2^15 QP_solve!(args...)
-
-  # CPU ###################################################
-  #sol = Array(sol)
-  #QP_solve!(sol, n, m, Array(Pp), Array(Pi), Array(Px), Array(q), Array(Ap), Array(Ai), Array(Ax), Array(l), Array(u))
+  CUDA.@sync @cuda threads = 1 blocks = 1 shmem = 2^15 QP_solve_cuda!(args...)
+  sol_out = copy(sol)
 
   # actually solve ##############kk
   #CUDA.@sync @cuda threads=1 blocks=1 QP_solve!(args...)
   println("Max imem: ", Array(info)[1])
   println("Max fmem: ", Array(info)[2])
   println("Iterations: ", Array(info)[3])
-  sol = Array(sol)
-  return sol
+  return Array(sol_out)
+end
+
+function solve_routine_cpu(P, q, A, l, u)
+  info = zeros(Int32, 3)
+  n, m = length(q), length(l)
+  iwork, fwork = zeros(Int32, 10^6), zeros(Float32, 10^6)
+  Pp, Pi, Px = sparseunwrap(P)
+  Ap, Ai, Ax = sparseunwrap(A)
+
+  iters = 200
+  sol = zeros(n + m)
+
+  # CPU ###################################################
+  vars = sol, info, Pp, Pi, Px, Ap, Ai, Ax, q, l, u, iwork, fwork
+  sol, info, Pp, Pi, Px, Ap, Ai, Ax, q, l, u, iwork, fwork = map(to_cpu, vars)
+  args = (sol, info, iters, n, m, (Pp, Pi, Px), q, (Ap, Ai, Ax), l, u, iwork, fwork)
+  display(@benchmark QP_solve_cpu!($args...))
+
+  QP_solve_cpu!(args...)
+  return copy(sol)
 end
 
 function solve_osqp(P, q, A, l, u)
   m = OSQP.Model()
-  OSQP.setup!(m, P=P, q=q, A=A, l=l, u=u, verbose=false)
+  #OSQP.setup!(m, P=P, q=q, A=A, l=l, u=u; verbose=true, polishing=false, adaptive_rho=false, max_iter=Int32(1e3), check_termination=0)
+  OSQP.setup!(m, P=P, q=q, A=A, l=l, u=u; verbose=true, polishing=false, adaptive_rho=false, check_termination=0, linsys_solver="qdldl", cg_max_iter=10000)
   return copy(OSQP.solve!(m).x)
 end
 
@@ -130,18 +173,15 @@ l = [b; -1.0 * ones(Float64, N * UDIM)]
 u = [b; 1.0 * ones(Float64, N * UDIM)]
 
 x1, u1 = split_vars(solve_osqp(P, q, A, l, u))
-#sol = solve_routine(P, q, A, l, u)
 x2, u2 = split_vars(solve_routine(P, q, A, l, u))
-x3, u3 = split_vars(solve_jump(P, q, A, l, u))
+#x3, u3 = split_vars(solve_jump(P, q, A, l, u))
+x4, u4 = split_vars(solve_routine_cpu(P, q, A, l, u))
 
-@printf("Error x = %.4e\n", norm(x1 - x2) / norm(x2))
-@printf("Error u = %.4e\n", norm(u1 - u2) / norm(u2))
-#println()
-#@printf("Error x = %.4e\n", norm(x1 - x3) / norm(x3))
-#@printf("Error u = %.4e\n", norm(u1 - u3) / norm(u3))
-#println()
-#@printf("Error x = %.4e\n", norm(x2 - x3) / norm(x3))
-#@printf("Error u = %.4e\n", norm(u2 - u3) / norm(u3))
+@printf("Error x = %.4e\n", norm(x2 - x1) / norm(x1))
+@printf("Error u = %.4e\n", norm(u2 - u1) / norm(u1))
+println()
+@printf("Error x = %.4e\n", norm(x4 - x1) / norm(x1))
+@printf("Error u = %.4e\n", norm(u4 - u1) / norm(u1))
 
 #plot(u2[1, :], label="u2")
 #plot(u1[1, :], label="u1")
