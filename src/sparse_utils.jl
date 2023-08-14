@@ -82,8 +82,8 @@ end
 function sptriu!(Ap, Ai, Ax)
   k, k_old, n = 0, 0, length(Ap) - 1
   Aps, Ape = Ap[1], Ap[2] - 1
-  for i in 1:n  #= @inbounds =#
-    for j in Aps:Ape    #= @inbounds =#
+  @cinbounds for i in 1:n
+    @cinbounds for j in Aps:Ape
       row, col = Ai[j], i
       if row <= col
         k += 1
@@ -103,8 +103,8 @@ end
 function sptril!(Ap, Ai, Ax)
   k, k_old, n = 0, 0, length(Ap) - 1
   Aps, Ape = Ap[1], Ap[2] - 1
-  for i in 1:n  #= @inbounds =#
-    for j in Aps:Ape    #= @inbounds =#
+  @cinbounds for i in 1:n
+    @cinbounds for j in Aps:Ape
       row, col = Ai[j], i
       if row >= col
         k += 1
@@ -123,8 +123,8 @@ end
 
 function spscal!(Ap, Ai, Ax, alf)
   n = length(Ap) - 1
-  for i in 1:n  #= @inbounds =#
-    for j in Ap[i]:Ap[i+1]-1    #= @inbounds =#
+  @cinbounds for i in 1:n
+    @cinbounds for j in Ap[i]:Ap[i+1]-1
       Ax[j] = Ax[j] * alf
     end
   end
@@ -133,8 +133,8 @@ end
 function spmul!(y, Ap, Ai, Ax, x) # GPU ok
   n = length(Ap) - 1
   vecfill!(y, 0.0f0)
-  for j in 1:n  #= @inbounds =#
-    for i in Ap[j]:Ap[j+1]-1    #= @inbounds =#
+  @cinbounds for j in 1:n
+    @cinbounds for i in Ap[j]:Ap[j+1]-1
       y[Ai[i]] += Ax[i] * x[j]
     end
   end
@@ -144,11 +144,11 @@ function spmatadd!(Cp, Ci, Cx, Ap, Ai, Ax, Bp, Bi, Bx) # GPU ok
   Cp[1] = 1
   l, l_old = 0, 0
   n = length(Ap) - 1
-  for k in 1:n  #= @inbounds =#
+  @cinbounds for k in 1:n
     An, Bn = Ap[k+1] - Ap[k], Bp[k+1] - Bp[k]
     As, Bs = Ap[k] - 1, Bp[k] - 1
     i, j = 1, 1
-    while i <= An || j <= Bn    #= @inbounds =#
+    @cinbounds while i <= An || j <= Bn
       if i <= An && j <= Bn && Ai[As+i] == Bi[Bs+j]
         l += 1
         Ci[l] = Ai[As+i]
@@ -210,16 +210,27 @@ function spcopy!(Cp, Ci, Cx, Ap, Ai, Ax)
   end
 end
 
-function spvcat!(Cp, Ci, Cx, m, Ap, Ai, Ax, Bp, Bi, Bx)
+function spvcat!(
+ Cp::CUDAArrayView{T1},
+ Ci::CUDAArrayView{T1},
+ Cx::CUDAArrayView{T2},
+ m::Int32,
+ Ap::CUDAArrayView{T1},
+ Ai::CUDAArrayView{T1},
+ Ax::CUDAArrayView{T2},
+ Bp::CUDAArrayView{T1},
+ Bi::CUDAArrayView{T1},
+ Bx::CUDAArrayView{T2}
+ ) where {T1, T2}
   l = 0
   Cp[1] = 1
-  for i in 1:length(Ap)-1  #= @inbounds =#
-    for j in Ap[i]:Ap[i+1]-1    #= @inbounds =#
+  @cinbounds for i in 1:length(Ap)-1
+    @cinbounds for j in Ap[i]:Ap[i+1]-1
       l += 1
       Ci[l] = Ai[j]
       Cx[l] = Ax[j]
     end
-    for j in Bp[i]:Bp[i+1]-1    #= @inbounds =#
+    @cinbounds for j in Bp[i]:Bp[i+1]-1
       l += 1
       Ci[l] = Bi[j] + m
       Cx[l] = Bx[j]
@@ -231,18 +242,18 @@ end
 
 function sphcat!(Cp, Ci, Cx, Ap, Ai, Ax, Bp, Bi, Bx)
   n1, n2 = length(Ap) - 1, length(Bp) - 1
-  for i in 1:n2  #= @inbounds =#
+  @cinbounds for i in 1:n2
     Cp[n1+i+1] = Bp[i+1] + Ap[end] - 1
   end
-  for i in 1:n1+1  #= @inbounds =#
+  @cinbounds for i in 1:n1+1
     Cp[i] = Ap[i]
   end
   Annz, Bnnz = length(Ax), length(Bx)
-  for i in 1:Bnnz  #= @inbounds =#
+  @cinbounds for i in 1:Bnnz
     Ci[i+Annz] = Bi[i]
     Cx[i+Annz] = Bx[i]
   end
-  for i in 1:Annz  #= @inbounds =#
+  @cinbounds for i in 1:Annz
     Ci[i] = Ai[i]
     Cx[i] = Ax[i]
   end
@@ -259,21 +270,21 @@ function sptranspose!(
   Ax::CUDAArrayView{T2},
 ) where {T1,T2} # type annotated CUDA version for type stability
   n, nnz = length(Xp) - 1, length(Ai)
-  for i in 1:n+1
+  @cinbounds for i in 1:n+1
     Xp[i] = 0
   end
   Xp[1] = 1
-  for k in 1:nnz
+  @cinbounds for k in 1:nnz
     Xp[Ai[k]+1] += 1
   end
   countsum = 1
-  for k in 2:n+1
+  @cinbounds for k in 2:n+1
     overwritten = Xp[k]
     Xp[k] = countsum
     countsum += overwritten
   end
-  for i in 1:(length(Ap)-1)
-    for k in (Ap[i]):(Ap[i+1]-1)
+  @cinbounds for i in 1:(length(Ap)-1)
+    @cinbounds for k in (Ap[i]):(Ap[i+1]-1)
       Xk = Xp[Ai[k]+1]
       Xi[Xk] = i
       Xx[Xk] = Ax[k]
@@ -285,21 +296,21 @@ end
 
 function sptranspose!(Xp, Xi, Xx, Ap, Ai, Ax) # CPU version without type annotations
   n, nnz = length(Xp) - 1, length(Ai)
-  for i in 1:n+1
+  @cinbounds for i in 1:n+1
     Xp[i] = 0
   end
   Xp[1] = 1
-  for k in 1:nnz
+  @cinbounds for k in 1:nnz
     Xp[Ai[k]+1] += 1
   end
   countsum = 1
-  for k in 2:n+1
+  @cinbounds for k in 2:n+1
     overwritten = Xp[k]
     Xp[k] = countsum
     countsum += overwritten
   end
-  for i in 1:(length(Ap)-1)
-    for k in (Ap[i]):(Ap[i+1]-1)
+  @cinbounds for i in 1:(length(Ap)-1)
+    @cinbounds for k in (Ap[i]):(Ap[i+1]-1)
       Xk = Xp[Ai[k]+1]
       Xi[Xk] = i
       Xx[Xk] = Ax[k]
@@ -310,7 +321,7 @@ function sptranspose!(Xp, Xi, Xx, Ap, Ai, Ax) # CPU version without type annotat
 end
 
 function spdiagadd!(Cp, Ci, Cx, lo, hi, alf)
-  for i in lo:hi  #= @inbounds =#
+  @cinbounds for i in lo:hi
     col = view(Ci, Cp[i]:(Cp[i+1]-1))
     idx = binary_search(col, i)
     if idx >= 1 && idx <= length(col)
@@ -341,13 +352,13 @@ function spmatmul!(C, mA, A, B, iwork)
   #nnzC = nnzC * 10
 
   xb, sort_iwork = view(iwork, 1:mA), view(iwork, mA+1:length(iwork))
-  for i in 1:length(xb)
+  @cinbounds for i in 1:length(xb)
     xb[i] = 0
   end
 
   ip = 1
-  for i in 1:nB
-    @cuassert ip + mA - 1 <= nnzC
+  @cinbounds for i in 1:nB
+    #@cuassert ip + mA - 1 <= nnzC
     Cp[i] = ip
     ip = spcolmul!(Ci, Cx, xb, i, ip, mA, Ap, Ai, Ax, Bp, Bi, Bx, sort_iwork)
   end
@@ -359,7 +370,7 @@ end
 @inline function spcolmul!(Ci, Cx, xb, i, ip, mA, Ap, Ai, Ax, Bp, Bi, Bx, sort_iwork)
   ip0 = ip
   k0 = ip - 1
-  for jp in (Bp[i]):(Bp[i+1]-1)
+  @cinbounds for jp in (Bp[i]):(Bp[i+1]-1)
     nzB = Bx[jp]
     j = Bi[jp]
     for kp in (Ap[j]):(Ap[j+1]-1)
@@ -380,14 +391,14 @@ end
       # in-place sort of indices. Effort: O(nnz*ln(nnz)).
       #sort!(Ci, ip0, ip - 1, QuickSort, Base.Order.Forward)
       mergesort!(Ci, ip0, ip - 1, sort_iwork)
-      for vp in ip0:ip-1
+      @cinbounds for vp in ip0:ip-1
         k = Ci[vp]
         xb[k] = 0
         Cx[vp] = Cx[k+k0]
       end
     else
       # scan result vector (effort O(mA))
-      for k in 1:mA
+      @cinbounds for k in 1:mA
         if xb[k] == 1
           xb[k] = 0
           Ci[ip0] = k

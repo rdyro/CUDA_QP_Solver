@@ -1,9 +1,3 @@
-macro identity(x) return esc(x) end
-
-var"@cinbounds" = var"@inbounds"
-#var"@cinbounds" = var"@identity"
-
-# Routines #####################################################################
 @inline function veccpy!(c, a)
   @simd for i in 1:length(a)
     @cinbounds c[i] = a[i]
@@ -61,5 +55,3 @@ end
   end
   return
 end
-
-# Routines #####################################################################

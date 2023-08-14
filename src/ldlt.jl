@@ -68,7 +68,7 @@ function LDLT_factor!(
   yVals = fwork
 
   Lp[1] = 1 #first column starts at index one / Julia is 1 indexed
-  for i in 1:n  #= @inbounds =#
+  @cinbounds for i in 1:n
     #compute L column indices
     Lp[i+1] = Lp[i] + Lnz[i]   #cumsum, total at the end
 
@@ -96,7 +96,7 @@ function LDLT_factor!(
 
   #Start from 1 here. The upper LH corner is trivially 0 in L b/c we are only
   # computing the subdiagonal elements
-  for k in 2:n  #= @inbounds =#
+  @cinbounds for k in 2:n
     #NB : For each k, we compute a solution to
     #y = L(1:k), 1:k)\b, where b is the kth
     #column of A that sits above the diagonal.
@@ -109,7 +109,7 @@ function LDLT_factor!(
     #This loop determines where nonzeros
     #will go in the kth row of L, but doesn't
     #compute the actual values
-    for i in Ap[k]:(Ap[k+1]-1)    #= @inbounds =#
+    @cinbounds for i in Ap[k]:(Ap[k+1]-1)
       bidx = Ai[i]   # we are working on this element of b
       #Initialize D[k] as the element of this column
       #corresponding to the diagonal place.  Don't use
@@ -131,7 +131,7 @@ function LDLT_factor!(
         nnzE = 1         #length of unvisited elimination path from here
 
         nextIdx = etree[bidx]
-        while nextIdx != LDLT_UNKNOWN && nextIdx < k        #= @inbounds =#
+        @cinbounds while nextIdx != LDLT_UNKNOWN && nextIdx < k
           if yMarkers[nextIdx] == LDLT_USED
             break
           end
@@ -146,7 +146,7 @@ function LDLT_factor!(
 
         # now I put the buffered elimination list into
         # my current ordering in reverse order
-        while (nnzE != 0)        #= @inbounds =#
+        @cinbounds while (nnzE != 0)
           #NB: inc/dec reordered relative to C because
           #the arrays are 1 indexed
           nnzY += 1
@@ -157,7 +157,7 @@ function LDLT_factor!(
     end
 
     #This for loop places nonzeros values in the k^th row
-    for i in nnzY:-1:1    #= @inbounds =#
+    @cinbounds for i in nnzY:-1:1
       #which column are we working on?
       cidx = yIdx[i]
 
@@ -169,7 +169,7 @@ function LDLT_factor!(
       #this is not implemented in the C version
       if !logicalFactor
         yVals_cidx = yVals[cidx]
-        for j in Lp[cidx]:(tmpIdx-1)        #= @inbounds =#
+        @cinbounds for j in Lp[cidx]:(tmpIdx-1)
           yVals[Li[j]] -= Lx[j] * yVals_cidx
         end
 

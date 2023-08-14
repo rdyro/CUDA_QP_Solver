@@ -1,8 +1,6 @@
 function define_kernel_cpu(config)
   return quote
     function QP_solve_cpu!(sol, info_, iters, n, m, P_, q_, A_, l_, u_, iwork_, fwork_)
-      #(threadIdx().x != 1 || blockIdx().x != 1) && (return)
-
       imem, fmem = 0, 0
 
       iwork = cpu_make_mem_sf(iwork_, zeros(Int32, 2^12))
@@ -157,65 +155,24 @@ function define_kernel_cpu(config)
 
       # solve in a loop for a fixed number of iterations ##########################
       k = 0
-      for i in Int32(1):Int32(iters)
+      for it in Int32(1):Int32(iters)
         k += 1
-        #@simd for i in 1:n
-        #  @cinbounds temp[i] = sig * x[i] - q[i]
-        #end
-        #@simd for i in 1:m
-        #  @cinbounds temp[n+i] = z[i] - y[i] / rho0
-        #end
-        #temp[1:n] .= sig * x - q
-        #temp[n+1:n+m] .= z - y ./ rho0
-        #@fastmath @inbounds @simd for i in 1:n
-        #  temp[i] = sig * x[i] - q[i]
-        #end
-        #@fastmath @inbounds @simd for i in 1:m
-        #  temp[n+i] = z[i] - y[i] / rho0
-        #end
-        #temp[1:n] .= sig * x - q
-        #temp[n+1:n+m] .= z - y ./ rho0
         admm_set_rhs_top!(view(temp, 1:n), sig, x, q)
         admm_set_rhs_bot!(view(temp, n+1:n+m), z, y, rho0)
 
         # solve the problem
         if $(config[:use_amd] == 1)
           vecpermute!(temp2, temp, perm)
-          #@fastmath @inbounds @simd for i in 1:(m + n)
-          #  temp2[i] = temp[perm[i]]
-          #end
-          #@simd for i in 1:length(temp)
-          #  @cinbounds temp2[i] = temp[perm[i]]
-          #end
           LDLT_solve!(n + m, L..., Dinv, temp2)
           vecpermute!(temp, temp2, iperm)
         else
           LDLT_solve!(n + m, L..., Dinv, temp)
         end
 
-        #veccpy!(x, view(temp, 1:n)), veccpy!(v, view(temp, n+1:n+m))
-        #@simd for i in 1:m
-        #  @cinbounds z[i] += (v[i] - y[i]) / rho0
-        #end
-        #@simd for i in 1:m
-        #  @cinbounds y[i] += rho0 * (z[i] - max(min(z[i] + y[i] / rho0, u[i]), l[i]))
-        #end
-
         veccpy!(x, view(temp, 1:n))
         veccpy!(v, view(temp, n+1:n+m))
-        #x .= temp[1:n]
-        #v .= temp[n+1:n+m]
         admm_update_z!(z, v, y, rho0)
         admm_update_y!(y, z, l, u, rho0)
-        #z .+= (v - y) ./ rho0
-        #y .+= rho0 .* (z .- max.(min.(z .+ y ./ rho0, u), l))
-
-        #@simd for i in 1:m
-        #  @cinbounds z[i] += (v[i] - y[i]) / rho0
-        #end
-        #@simd for i in 1:m
-        #  @cinbounds y[i] += rho0 * (z[i] - max(min(z[i] + y[i] / rho0, u[i]), l[i]))
-        #end
       end
 
       # copy the result into the solution vector ###################################

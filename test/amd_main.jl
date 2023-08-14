@@ -1,24 +1,27 @@
 using LinearAlgebra, SparseArrays, BenchmarkTools
-using PyPlot, Printf, JuMP, OSQP
+using PyPlot, Printf, JuMP, OSQP, JSON
 using CUDA, OSQP, Cthulhu, Infiltrator
-#using Infiltrator, Profile, ProfileView
+using NVTX
 CUDA.allowscalar(false)
 BenchmarkTools.DEFAULT_PARAMETERS.samples = 100
 BenchmarkTools.DEFAULT_PARAMETERS.seconds = 5
 
-include(abspath(joinpath(@__DIR__, "..", "src", "vec_utils.jl")))
-include(abspath(joinpath(@__DIR__, "..", "src", "mem_utils.jl")))
-include(abspath(joinpath(@__DIR__, "..", "src", "gpu_sparse.jl")))
-include(abspath(joinpath(@__DIR__, "..", "src", "admm_utils.jl")))
-include(abspath(joinpath(@__DIR__, "..", "src", "mpc.jl")))
-include(abspath(joinpath(@__DIR__, "..", "src", "ldlt.jl")))
-include(abspath(joinpath(@__DIR__, "..", "src", "qp_cpu.jl")))
-include(abspath(joinpath(@__DIR__, "..", "src", "qp_cuda.jl")))
+include(abspath(joinpath(@__DIR__, "..", "src", "header.jl")))
 include(abspath(joinpath(@__DIR__, "..", "src", "amd_pkg", "amd_pkg.jl")))
 
 ################################################################################
 sparseunwrap(A) = (A.colptr, A.rowval, A.nzval)
 ################################################################################
+
+function read_matrix(fname)
+  data = JSON.parse(read(fname, String))
+  Ap = Int.(data["Ap"])
+  Ai = Int.(data["Ai"])
+  Ax = Float64.(data["Ax"])
+  m = maximum(Ai)
+  n = length(Ap) - 1
+  return SparseMatrixCSC{Float64, Int64}(m, n, Ap, Ai, Ax)
+end
 
 # make the system #################
 N, XDIM, UDIM = 37, 2, 1
@@ -32,7 +35,7 @@ config = Dict{Symbol,Int32}(
   :mem_H => 0,
   :mem_I => 0,
   :mem_T => 0,
-  :mem_perm => 0,
+  :mem_perm => 1,
   :mem_perm_work => 0,
   :mem_H_perm_work => 0,
   :mem_H_perm => 0,
@@ -46,7 +49,6 @@ config = Dict{Symbol,Int32}(
   :mem_temp => 1,
   :mem_x => 1,
   :mem_z => 1,
-  :mem_zproj => 1,
   :mem_y => 1,
   :mem_v => 1,
   :use_amd => 1,
@@ -54,11 +56,20 @@ config = Dict{Symbol,Int32}(
 
 eval(define_kernel_cuda(config))
 eval(define_kernel_cpu(config))
-to_cuda(x) = eltype(x) <: AbstractFloat ? CuArray{Float32}(x) : CuArray{Int32}(x)
+function to_cuda(x)
+  if typeof(x) <: Tuple
+    return map(to_cuda, x)
+  else
+    return eltype(x) <: AbstractFloat ? CuArray{Float32}(x) : CuArray{Int32}(x)
+  end
+end
+#to_cuda(x) = CUDA.cu(x)
 to_cpu(x) = Array(x)
 
+copy_tuple(x) = map(copy, x)
+
 function solve_routine(P, q, A, l, u)
-  info = zeros(Int32, 3)
+  info = zeros(Int32, 5)
   n, m = length(q), length(l)
   iwork, fwork = zeros(Int32, 10^6), zeros(Float32, 10^6)
   Pp, Pi, Px = sparseunwrap(P)
@@ -68,24 +79,37 @@ function solve_routine(P, q, A, l, u)
   sol = zeros(n + m)
 
   # CUDA ##################################################
-  vars = sol, info, Pp, Pi, Px, Ap, Ai, Ax, q, l, u, iwork, fwork
-  sol, info, Pp, Pi, Px, Ap, Ai, Ax, q, l, u, iwork, fwork = map(to_cuda, vars)
+  #sol, info, Pp, Pi, Px, Ap, Ai, Ax, q, l, u, iwork, fwork = map(to_cuda, vars)
 
-  args = (sol, info, iters, n, m, (Pp, Pi, Px), q, (Ap, Ai, Ax), l, u, iwork, fwork)
-  bench = @benchmark CUDA.@sync @cuda threads = 1 blocks = 1 shmem = 2^15 QP_solve_cuda!($args...)
-  println("Times:")
-  for t in bench.times
-    println(t / 1e9)
-  end
-  println("Mean time: ", mean(bench.times) / 1e9)
-  CUDA.@sync @cuda threads = 1 blocks = 1 shmem = 2^15 QP_solve_cuda!(args...)
-  sol_out = copy(sol)
+  args = (sol, info, iters, n, m, Pp, Pi, Px, q, Ap, Ai, Ax, l, u, iwork, fwork)
+  n_blocks = 1024
+  args = map(x -> reduce(vcat, [copy(x) for _ in 1:n_blocks]), args)
+  sols, infos, iterss, ns, ms, Pps, Pis, Pxs, qs, Aps, Ais, Axs, ls, us, iwork, fwork = args
+  work_sizes = fill(Int32(10^6), n_blocks)
+  n_offsets = Int32.(cumsum([0; fill(n, n_blocks)]))[1:end-1]
+  m_offsets = Int32.(cumsum([0; fill(m, n_blocks)]))[1:end-1]
+  Pnnz_offsets = Int32.(cumsum([0; fill(Pp[end] - 1, n_blocks)]))[1:end-1]
+  Annz_offsets = Int32.(cumsum([0; fill(Ap[end] - 1, n_blocks)]))[1:end-1]
+  work_offsets = Int32.(cumsum([0; fill(work_sizes[1], n_blocks)]))[1:end-1]
+
+  offsets = (n_offsets, m_offsets, Pnnz_offsets, Annz_offsets, work_offsets)
+  args = (sols, infos, iterss, ns, ms, (Pps, Pis, Pxs), qs, (Aps, Ais, Axs), ls, us, iwork, fwork, work_sizes, offsets)
+  args = map(to_cuda, args)
+  sols, infos, iterss, ns, ms, (Pps, Pis, Pxs), qs, (Aps, Ais, Axs), ls, us, iwork, fwork, work_sizes, offsets = args
+
+  CUDA.@sync @cuda threads = 1 blocks = n_blocks shmem = 2^15 QP_solve_cuda!(args...)
+
+  bench = @benchmark CUDA.@sync @cuda threads = 1 blocks = $n_blocks shmem = 2^15 QP_solve_cuda!($args...)
+  display(bench)
+  sol_out = copy(sols[1:n+m])
 
   # actually solve ##############kk
   #CUDA.@sync @cuda threads=1 blocks=1 QP_solve!(args...)
-  println("Max imem: ", Array(info)[1])
-  println("Max fmem: ", Array(info)[2])
-  println("Iterations: ", Array(info)[3])
+  println("Max imem_fast: ", Array(infos)[1])
+  println("Max fmem_fast: ", Array(infos)[2])
+  println("Max imem_slow: ", Array(infos)[3])
+  println("Max fmem_slow: ", Array(infos)[4])
+  println("Iterations: ", Array(infos)[5])
   return Array(sol_out)
 end
 
@@ -175,13 +199,13 @@ u = [b; 1.0 * ones(Float64, N * UDIM)]
 x1, u1 = split_vars(solve_osqp(P, q, A, l, u))
 x2, u2 = split_vars(solve_routine(P, q, A, l, u))
 #x3, u3 = split_vars(solve_jump(P, q, A, l, u))
-x4, u4 = split_vars(solve_routine_cpu(P, q, A, l, u))
+#x4, u4 = split_vars(solve_routine_cpu(P, q, A, l, u))
 
 @printf("Error x = %.4e\n", norm(x2 - x1) / norm(x1))
 @printf("Error u = %.4e\n", norm(u2 - u1) / norm(u1))
 println()
-@printf("Error x = %.4e\n", norm(x4 - x1) / norm(x1))
-@printf("Error u = %.4e\n", norm(u4 - u1) / norm(u1))
+#@printf("Error x = %.4e\n", norm(x4 - x1) / norm(x1))
+#@printf("Error u = %.4e\n", norm(u4 - u1) / norm(u1))
 
 #plot(u2[1, :], label="u2")
 #plot(u1[1, :], label="u1")

@@ -2,17 +2,17 @@
 
 function merge!(a, lo, mi, hi, iwork)
   i, j, k = lo, mi + 1, lo
-  while i <= mi && j <= hi  #= @inbounds =#
+  @cinbounds while i <= mi && j <= hi
     if a[i] > a[j]
       iwork[k], j, k = a[j], j + 1, k + 1
     else
       iwork[k], i, k = a[i], i + 1, k + 1
     end
   end
-  while i <= mi  #= @inbounds =#
+  @cinbounds while i <= mi  #= @inbounds =#
     iwork[k], i, k = a[i], i + 1, k + 1
   end
-  while j <= hi  #= @inbounds =#
+  @cinbounds while j <= hi  #= @inbounds =#
     iwork[k], j, k = a[j], j + 1, k + 1
   end
   return
@@ -43,7 +43,7 @@ function mergesort!(a, lo, hi, iwork)
     step *= 2
   end
   if !odd_run
-    for i in lo:hi
+    @cinbounds for i in lo:hi
       a[i] = iwork[i]
     end
   end
@@ -55,17 +55,17 @@ end
 
 function mergearg!(idx, a, lo, mi, hi, iwork)
   i, j, k = lo, mi + 1, lo
-  while i <= mi && j <= hi  #= @inbounds =#
+  @cinbounds while i <= mi && j <= hi
     if a[idx[i]] > a[idx[j]]
       iwork[k], j, k = idx[j], j + 1, k + 1
     else
       iwork[k], i, k = idx[i], i + 1, k + 1
     end
   end
-  while i <= mi  #= @inbounds =#
+  @cinbounds while i <= mi  #= @inbounds =#
     iwork[k], i, k = idx[i], i + 1, k + 1
   end
-  while j <= hi  #= @inbounds =#
+  @cinbounds while j <= hi  #= @inbounds =#
     iwork[k], j, k = idx[j], j + 1, k + 1
   end
   return
@@ -97,13 +97,12 @@ function mergeargsort!(idx, a, lo, hi, iwork)
     step *= 2
   end
   if !odd_run
-    for i in lo:hi
+    @cinbounds for i in lo:hi
       idx[i] = iwork[i]
     end
   end
   return
 end
-
 
 
 # tests ############################################################################################
