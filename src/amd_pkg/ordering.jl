@@ -105,7 +105,7 @@ function vertex_weight_5depth(
   weight = 0
   n = length(Ap) - 1
   n_bits = div(n, BIT_SIZE) + 1
-  @simd for i in 1:n_bits
+  @csimd for i in 1:n_bits
     @cinbounds set_work[i] = 0
   end
   for n1 in get_neighbors(Ap, Ai, v)
@@ -149,7 +149,7 @@ function vertex_weight_amd(
   weight = 0
   n = length(Ap) - 1
   n_bits = div(n, BIT_SIZE) + 1
-  @simd for i in 1:n_bits
+  @csimd for i in 1:n_bits
     @cinbounds set_work[i] = 0
   end
   for n1 in get_neighbors(Ap, Ai, v)
@@ -179,7 +179,7 @@ function vertex_weight_exact(
   weight = 0
   n = length(Ap) - 1
   n_bits = div(n, BIT_SIZE) + 1
-  @simd for i in 1:n_bits
+  @csimd for i in 1:n_bits
     @cinbounds neighbor_set[i] = 0
     @cinbounds queue_set[i] = 0
   end
@@ -214,7 +214,7 @@ function compute_fillin(Ap::Vec{T}, Ai::Vec{T}, perm::Vec{T}, iwork::Vec{T}) whe
     @cinbounds queue_set = @view iwork[n+1:n+n_bits]
     @cinbounds is_enode_set = @view iwork[n+n_bits+1:n+2*n_bits]
     @cinbounds neighbor_set = @view iwork[n+2*n_bits+1:n+3*n_bits]
-    @simd for i in 1:n_bits
+    @csimd for i in 1:n_bits
       @cinbounds is_enode_set[i] = 0
     end
   end

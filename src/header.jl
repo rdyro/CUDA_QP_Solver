@@ -2,6 +2,8 @@ macro identity(x) return esc(x) end
 
 var"@cinbounds" = var"@inbounds"
 #var"@cinbounds" = var"@identity"
+#var"@csimd" = var"@simd"
+var"@csimd" = var"@identity"
 
 include(joinpath(@__DIR__, "mem_utils.jl"))
 include(joinpath(@__DIR__, "vec_utils.jl"))

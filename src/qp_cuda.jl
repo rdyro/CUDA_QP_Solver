@@ -21,13 +21,14 @@ end
 function define_kernel_cuda(config)
   return quote
     #function QP_solve_cuda!(sols, infos, iters, n, m, P_, q_, A_, l_, u_, iwork_, fwork_)
-    function QP_solve_cuda!(sols, infos, iterss, ns, ms, Ps, qs, As, ls, us, iworks, fworks, work_sizes, offsets)
+    function QP_solve_cuda!(sols, infos, iterss, ns, ms, Ps, qs, As, ls, us, iworks, fworks, work_sizes, offsets, n_threads)
       rho0, sig = 1.0f1, 1.0f-6
 
       n_offsets, m_offsets, Pnnz_offsets, Annz_offsets, work_offsets = offsets
       #(threadIdx().x != 1 || blockIdx().x != 1) && (return)
       #@cuprintf("threadIdx().x = %d, blockIdx().x = %d\n", threadIdx().x, blockIdx().x)
 
+      thread_idx = threadIdx().x
       idx = blockIdx().x
       if idx > length(ns)
         return
@@ -71,7 +72,9 @@ function define_kernel_cuda(config)
       q = alloc_mem_sf!(fwork, n, $(config[:mem_q]))
       l = alloc_mem_sf!(fwork, m, $(config[:mem_lu]))
       u = alloc_mem_sf!(fwork, m, $(config[:mem_lu]))
-      veccpy!(q, q_), veccpy!(l, l_), veccpy!(u, u_)
+      if thread_idx == 1
+        veccpy!(q, q_), veccpy!(l, l_), veccpy!(u, u_)
+      end
 
       Pnnz, Annz = len32(P_[2]), len32(A_[2])
       Hnnz = Int32(Pnnz + 2 * Annz + m + n)
@@ -81,7 +84,6 @@ function define_kernel_cuda(config)
         alloc_mem_sf!(iwork, Hnnz, $(config[:mem_H])),
         alloc_mem_sf!(fwork, Hnnz, $(config[:mem_H])),
       ) # alloc H
-
       # alloc AT
       AT = (
         alloc_mem_sf!(iwork, m + 1, $(config[:mem_AT])),
@@ -98,12 +100,16 @@ function define_kernel_cuda(config)
         alloc_mem_sf!(iwork, n, $(config[:mem_I])),
         alloc_mem_sf!(fwork, n, $(config[:mem_I])),
       ) # alloc I
-      @simd for i in 1:n
-        @cinbounds I[1][i], I[2][i], I[3][i] = i, i, sig
+
+      if thread_idx == 1
+        for i in 1:n
+          @cinbounds I[1][i], I[2][i], I[3][i] = i, i, sig
+        end
+        I[1][n+1] = n + 1
+        spmatadd!(P..., P_..., I...)
+        P = trim_spmat(P...)
       end
-      I[1][n+1] = n + 1
-      spmatadd!(P..., P_..., I...)
-      P = trim_spmat(P...)
+      sync_threads()
       Pnnz = Int32(P[1][end] - 1)
       free_mem_sf!(fwork, n, $(config[:mem_I]))
       free_mem_sf!(iwork, n, $(config[:mem_I]))
@@ -115,37 +121,24 @@ function define_kernel_cuda(config)
         alloc_mem_sf!(iwork, Annz, $(config[:mem_A])),
         alloc_mem_sf!(fwork, Annz, $(config[:mem_A])),
       ) # alloc A
-      veccpy!(A[1], A_[1]), veccpy!(A[2], A_[2]), veccpy!(A[3], A_[3])
-
-      sptranspose!(AT..., A...)
-
-      #sptriu!(P...)
-      #P = trim_spmat(P...)
+      if thread_idx == 1
+        veccpy!(A[1], A_[1]), veccpy!(A[2], A_[2]), veccpy!(A[3], A_[3])
+        sptranspose!(AT..., A...)
+      end
       ##################################################################################################
 
       # create an identity matrix ##################################################
-      #I = (
-      #  alloc_mem_sf!(iwork, n + m + 1, $(config[:mem_I])),
-      #  alloc_mem_sf!(iwork, n + m, $(config[:mem_I])),
-      #  alloc_mem_sf!(fwork, n + m, $(config[:mem_I])),
-      #) # alloc I
-      #@simd for i in 1:n
-      #  @cinbounds I[1][i], I[2][i], I[3][i] = i, i, sig
-      #end
-      #@simd for i in 1:m
-      #  @cinbounds I[1][n+i], I[2][n+i], I[3][n+i] = i + n, i + n, -1.0f0 / rho0
-      #end
-      #@cinbounds I[1][n+m+1] = n + m + 1
-
       I = (
         alloc_mem_sf!(iwork, m + 1, $(config[:mem_I])),
         alloc_mem_sf!(iwork, m, $(config[:mem_I])),
         alloc_mem_sf!(fwork, m, $(config[:mem_I])),
       ) # alloc I
-      @simd for i in 1:m
-        @cinbounds I[1][i], I[2][i], I[3][i] = i, i, -1.0f0 / rho0
+      if thread_idx == 1
+        for i in 1:m
+          @cinbounds I[1][i], I[2][i], I[3][i] = i, i, -1.0f0 / rho0
+        end
+        @cinbounds I[1][m+1] = m + 1
       end
-      @cinbounds I[1][m+1] = m + 1
 
       # allocate the temporary matrix for combined hessian matrix ###################
       T_upper = (
@@ -159,14 +152,15 @@ function define_kernel_cuda(config)
         alloc_mem_sf!(fwork, Annz + m, $(config[:mem_T])),
       ) # alloc T_lower
 
-      sphcat!(T_upper..., P..., AT...)
-      T_upper = trim_spmat(T_upper...)
-      sphcat!(T_lower..., A..., I...)
-      T_lower = trim_spmat(T_lower...)
-      spvcat!(H..., n, T_upper..., T_lower...)
-      H = trim_spmat(H...)
+      if thread_idx == 1
+        sphcat!(T_upper..., P..., AT...)
+        T_upper = trim_spmat(T_upper...)
+        sphcat!(T_lower..., A..., I...)
+        T_lower = trim_spmat(T_lower...)
+        spvcat!(H..., n, T_upper..., T_lower...)
+        H = trim_spmat(H...)
+      end
 
-      Hnnz = H[1][end] - 1
       imem_fast = max(imem_fast, fast_buffer_used(iwork))
       fmem_fast = max(fmem_fast, fast_buffer_used(fwork))
       imem_slow = max(imem_slow, slow_buffer_used(iwork))
@@ -193,13 +187,19 @@ function define_kernel_cuda(config)
 
       # compute the permutation and ordering ########################################
 
-      H = trim_spmat(H...)
+      
+      if thread_idx == 1
+        H = trim_spmat(H...)
+      end
+      sync_threads()
       Hnnz = H[1][end] - 1
       if $(config[:use_amd] == 1)
         perm = alloc_mem_sf!(iwork, n + m, $(config[:mem_perm]))
         n_bits = AMDPKG.compute_n_bits(n + m)
         ordering_iwork = alloc_mem_sf!(iwork, 2 * (n + m + n_bits), 0)
-        AMDPKG.find_ordering(perm, H[1], H[2], ordering_iwork)
+        if thread_idx == 1
+          AMDPKG.find_ordering(perm, H[1], H[2], ordering_iwork)
+        end
         imem_fast = max(imem_fast, fast_buffer_used(iwork))
         fmem_fast = max(fmem_fast, fast_buffer_used(fwork))
         imem_slow = max(imem_slow, slow_buffer_used(iwork))
@@ -207,7 +207,9 @@ function define_kernel_cuda(config)
         free_mem_sf!(iwork, 2 * (n + m + n_bits), 0)
         iperm = alloc_mem_sf!(iwork, n + m, $(config[:mem_perm]))
         iperm_iwork = alloc_mem_sf!(iwork, n + m, $(config[:mem_perm_work]))
-        AMDPKG.mergeargsort!(iperm, perm, 1, length(perm), iperm_iwork)
+        if thread_idx == 1
+          AMDPKG.mergeargsort!(iperm, perm, 1, length(perm), iperm_iwork)
+        end
         imem_fast = max(imem_fast, fast_buffer_used(iwork))
         fmem_fast = max(fmem_fast, fast_buffer_used(fwork))
         imem_slow = max(imem_slow, slow_buffer_used(iwork))
@@ -219,7 +221,9 @@ function define_kernel_cuda(config)
           alloc_mem_sf!(fwork, Hnnz, $(config[:mem_H_perm])),
         )
         permute_iwork = alloc_mem_sf!(iwork, 2 * (n + m), $(config[:mem_H_perm_work]))
-        AMDPKG.permute_mat(H_perm, H, perm, iperm, permute_iwork)
+        if thread_idx == 1
+          AMDPKG.permute_mat(H_perm, H, perm, iperm, permute_iwork)
+        end
         imem_fast = max(imem_fast, fast_buffer_used(iwork))
         fmem_fast = max(fmem_fast, fast_buffer_used(fwork))
         imem_slow = max(imem_slow, slow_buffer_used(iwork))
@@ -229,7 +233,9 @@ function define_kernel_cuda(config)
       end
 
       #cuprint_matrix(H)
-      sptriu!(H...)
+      if thread_idx == 1
+        sptriu!(H...)
+      end
 
       # allocate and compute the LDLT factorization ################################
 
@@ -238,18 +244,21 @@ function define_kernel_cuda(config)
       etree = alloc_mem_sf!(iwork, n + m, $(config[:mem_etree]))
       etree_iwork = alloc_mem_sf!(iwork, n + m, $(config[:mem_etree_iwork])) # alloc etree_iwork
 
-      LDLT_etree!(n + m, H[1:2]..., etree_iwork, Lnz, info, etree)
+      if thread_idx == 1
+        LDLT_etree!(n + m, H[1:2]..., etree_iwork, Lnz, info, etree)
+      end
       imem_fast = max(imem_fast, fast_buffer_used(iwork))
       fmem_fast = max(fmem_fast, fast_buffer_used(fwork))
       imem_slow = max(imem_slow, slow_buffer_used(iwork))
       fmem_slow = max(fmem_slow, slow_buffer_used(fwork))
       free_mem_sf!(iwork, n + m, $(config[:mem_etree_iwork])) # free etree_iwork
 
-      if info[1] <= 0 #@cuassert info[1] > 0
+      if thread_idx == 1 && info[1] <= 0 #@cuassert info[1] > 0
         vecfill!(sol, NaN)
         @cuprintf("Etree failed on idx = %d\n", Int32(idx))
         return
       end
+      sync_threads()
       Lnnz = info[1]
 
       L = (
@@ -263,14 +272,16 @@ function define_kernel_cuda(config)
       ldlt_iwork = alloc_mem_sf!(iwork, 4 * (n + m), $(config[:mem_ldlt_iwork])) # alloc ldlt_iwork
       ldlt_fwork = alloc_mem_sf!(fwork, 2 * (n + m), $(config[:mem_ldlt_iwork])) # alloc ldlt_fwork
 
-      LDLT_factor!(n + m, H, L, D, Dinv, info, Lnz, etree, ldlt_iwork, ldlt_fwork, false)
+      if thread_idx == 1
+        LDLT_factor!(n + m, H, L, D, Dinv, info, Lnz, etree, ldlt_iwork, ldlt_fwork, false)
+      end
       imem_fast = max(imem_fast, fast_buffer_used(iwork))
       fmem_fast = max(fmem_fast, fast_buffer_used(fwork))
       imem_slow = max(imem_slow, slow_buffer_used(iwork))
       fmem_slow = max(fmem_slow, slow_buffer_used(fwork))
       free_mem_sf!(iwork, 4 * (n + m), $(config[:mem_ldlt_iwork])) # free ldlt_iwork
       free_mem_sf!(fwork, 2 * (n + m), $(config[:mem_ldlt_fwork])) # free ldlt_fwork
-      if info[1] <= 0 # @cuassert info[1] > 0
+      if thread_idx == 1 && info[1] <= 0 # @cuassert info[1] > 0
         vecfill!(sol, NaN)
         @cuprintf("factor failed on idx = %d\n", Int32(idx))
         return
@@ -284,48 +295,85 @@ function define_kernel_cuda(config)
       z = alloc_mem_sf!(fwork, m, $(config[:mem_z]))
       y = alloc_mem_sf!(fwork, m, $(config[:mem_y]))
 
+      sync_threads()
+
       # solve in a loop for a fixed number of iterations ##########################
       k = 0
+
+      n_thread_sidx = ceil(Int32, n / n_threads) * (threadIdx().x - 1) + 1
+      m_thread_sidx = ceil(Int32, m / n_threads) * (threadIdx().x - 1) + 1
+      nm_thread_sidx = ceil(Int32, (n + m) / n_threads) * (threadIdx().x - 1) + 1
+      n_thread_eidx = min(ceil(Int32, n / n_threads) * threadIdx().x, n)
+      m_thread_eidx = min(ceil(Int32, m / n_threads) * threadIdx().x, m)
+      nm_thread_eidx = min(ceil(Int32, (n + m) / n_threads) * threadIdx().x, n + m)
+
       for it in Int32(1):Int32(iters)
         k += 1
-        admm_set_rhs_top!(view(temp, 1:n), sig, x, q)
-        admm_set_rhs_bot!(view(temp, n+1:n+m), z, y, rho0)
+        #admm_set_rhs_top!(view(temp, 1:n), sig, x, q)
+        #admm_set_rhs_bot!(view(temp, n+1:n+m), z, y, rho0)
+        admm_set_rhs_top!(view(temp, 1:n), sig, x, q, n_thread_sidx, n_thread_eidx)
+        admm_set_rhs_bot!(view(temp, n+1:n+m), z, y, rho0, m_thread_sidx, m_thread_eidx)
+
+        sync_threads()
 
         # solve the problem
         if $(config[:use_amd] == 1)
-          vecpermute!(temp2, temp, perm)
-          LDLT_solve!(n + m, L..., Dinv, temp2)
-          vecpermute!(temp, temp2, iperm)
+          #vecpermute!(temp2, temp, perm, nm_thread_sidx, nm_thread_eidx)
+          ##LDLT_solve!(n + m, L..., Dinv, temp2)
+          #sync_threads()
+          #if thread_idx == 1
+          #  LDLT_solve!(n + m, L..., Dinv, temp2)
+          #end
+          ##LDLT_solve!(n + m, L..., Dinv, temp2, n_threads)
+          #vecpermute!(temp, temp2, iperm, nm_thread_sidx, nm_thread_eidx)
+
+          #if thread_idx == 1
+          #  vecpermute!(temp2, temp, perm)
+          #  LDLT_solve!(n + m, L..., Dinv, temp2)
+          #  vecpermute!(temp, temp2, iperm)
+          #end
+
+          vecpermute!(temp2, temp, perm, nm_thread_sidx, nm_thread_eidx)
+          sync_threads()
+          LDLT_solve!(n + m, L..., Dinv, temp2, n_threads)
+          if thread_idx == 1
+            #LDLT_solve!(n + m, L..., Dinv, temp2)
+          end
+          sync_threads()
+          vecpermute!(temp, temp2, iperm, nm_thread_sidx, nm_thread_eidx)
+          #sync_threads()
         else
-          LDLT_solve!(n + m, L..., Dinv, temp)
+          #LDLT_solve!(n + m, L..., Dinv, temp)
         end
+        sync_threads()
 
-        veccpy!(x, view(temp, 1:n))
-        veccpy!(v, view(temp, n+1:n+m))
-
-        x_norm = 0.0
-        for i in 1:length(x)
-          x_norm += x[i] * x[i]
-        end
-
-        admm_update_z!(z, v, y, rho0)
-        admm_update_y!(y, z, l, u, rho0)
+        veccpy!(x, view(temp, 1:n), n_thread_sidx, n_thread_eidx)
+        veccpy!(v, view(temp, n+1:n+m), m_thread_sidx, m_thread_eidx)
+        sync_threads()
+        #admm_update_z!(z, v, y, rho0)
+        #admm_update_y!(y, z, l, u, rho0)
+        admm_update_z!(z, v, y, rho0, n_thread_sidx, n_thread_eidx)
+        admm_update_y!(y, z, l, u, rho0, m_thread_sidx, m_thread_eidx)
+        sync_threads()
       end
 
       # copy the result into the solution vector ###################################
-      veccpy!(view(sol, 1:n), x)
-      veccpy!(view(sol, n+1:n+m), y)
+      veccpy!(view(sol, 1:n), x, n_thread_sidx, n_thread_eidx)
+      veccpy!(view(sol, n+1:n+m), y, m_thread_sidx, m_thread_eidx)
+      sync_threads()
 
       # show the memory usage ######################################################
       imem_fast = max(imem_fast, fast_buffer_used(iwork))
       fmem_fast = max(fmem_fast, fast_buffer_used(fwork))
       imem_slow = max(imem_slow, slow_buffer_used(iwork))
       fmem_slow = max(fmem_slow, slow_buffer_used(fwork))
-      info_[1] = Int32(imem_fast)
-      info_[2] = Int32(fmem_fast)
-      info_[3] = Int32(imem_slow)
-      info_[4] = Int32(fmem_slow)
-      info_[5] = Int32(k)
+      if thread_idx == 1
+        info_[1] = Int32(imem_fast)
+        info_[2] = Int32(fmem_fast)
+        info_[3] = Int32(imem_slow)
+        info_[4] = Int32(fmem_slow)
+        info_[5] = Int32(k)
+      end
       return
     end
   end

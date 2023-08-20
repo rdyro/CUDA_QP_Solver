@@ -238,10 +238,62 @@ end
 # with x replacing b
 @inline function LDLT_solve!(n, Lp, Li, Lx, Dinv, b)
   LDLT_Lsolve!(n, Lp, Li, Lx, b)
-  @simd for i in 1:n
+  @csimd for i in 1:n
     @cinbounds b[i] = b[i] * Dinv[i]
   end
   LDLT_LTsolve!(n, Lp, Li, Lx, b)
   return
 end
-################################################################################
+####################################################################################################
+
+# Solves (L+I)x = b, with x replacing b
+@inline function LDLT_Lsolve!(n, Lp, Li, Lx, x, n_threads)
+  for i in 1:n
+    npt = ceil(Int32, (Lp[i+1] - Lp[i]) / n_threads) # n per thread
+    s, e = npt * (threadIdx().x - 1) + Lp[i], min(npt * threadIdx().x, Lp[i+1]-1)
+    @cinbounds for j in s:e
+      @cinbounds x[Li[j]] -= Lx[j] * x[i]
+    end
+    sync_threads()
+  end
+  return
+end
+
+# Solves (L+I)'x = b, with x replacing b
+@inline function LDLT_LTsolve!(n, Lp, Li, Lx, x, n_threads)
+  for i in n:-1:1
+    npt = ceil(Int32, (Lp[i+1] - Lp[i]) / n_threads) # n per thread
+    s, e = npt * (threadIdx().x - 1) + Lp[i], min(npt * threadIdx().x, Lp[i+1]-1)
+    @cinbounds for j in s:e
+      @cinbounds x[i] -= Lx[j] * x[Li[j]]
+    end 
+    sync_threads()
+  end
+  return
+end
+
+# Solves Ax = b where A has given LDL factors,
+# with x replacing b
+@inline function LDLT_solve!(n, Lp, Li, Lx, Dinv, b, n_threads)
+  thread_idx = threadIdx().x
+
+  #LDLT_Lsolve!(n, Lp, Li, Lx, b, n_threads)
+  if thread_idx == 1
+    LDLT_Lsolve!(n, Lp, Li, Lx, b)
+  end
+  sync_threads()
+
+  npt = ceil(Int32, n / n_threads) # n per thread
+  s, e = npt * (thread_idx - 1) + 1, min(npt * thread_idx, n)
+  for i in s:e
+    @cinbounds b[i] = b[i] * Dinv[i]
+  end
+  sync_threads()
+
+  #LDLT_LTsolve!(n, Lp, Li, Lx, b, n_threads)
+  if thread_idx ==  1
+    LDLT_LTsolve!(n, Lp, Li, Lx, b)
+  end
+  sync_threads()
+  return
+end

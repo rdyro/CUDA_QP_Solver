@@ -5,6 +5,7 @@ using Printf, LinearAlgebra, SparseArrays, Statistics, Random
 macro identity(x) return esc(x) end
 var"@cinbounds" = var"@inbounds"
 #var"@cinbounds" = var"@identity"
+var"@csimd" = var"@simd"
 
 Vec{T} = AbstractVector{T} where {T}
 SparseTuple = Tuple{Vec, Vec, Vec}

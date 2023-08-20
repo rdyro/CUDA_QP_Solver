@@ -82,7 +82,7 @@ function solve_routine(P, q, A, l, u)
   #sol, info, Pp, Pi, Px, Ap, Ai, Ax, q, l, u, iwork, fwork = map(to_cuda, vars)
 
   args = (sol, info, iters, n, m, Pp, Pi, Px, q, Ap, Ai, Ax, l, u, iwork, fwork)
-  n_blocks = 1024
+  n_blocks, n_threads = 164, 64
   args = map(x -> reduce(vcat, [copy(x) for _ in 1:n_blocks]), args)
   sols, infos, iterss, ns, ms, Pps, Pis, Pxs, qs, Aps, Ais, Axs, ls, us, iwork, fwork = args
   work_sizes = fill(Int32(10^6), n_blocks)
@@ -97,9 +97,9 @@ function solve_routine(P, q, A, l, u)
   args = map(to_cuda, args)
   sols, infos, iterss, ns, ms, (Pps, Pis, Pxs), qs, (Aps, Ais, Axs), ls, us, iwork, fwork, work_sizes, offsets = args
 
-  CUDA.@sync @cuda threads = 1 blocks = n_blocks shmem = 2^15 QP_solve_cuda!(args...)
+  CUDA.@sync @cuda threads = n_threads blocks = n_blocks shmem = 2^15 QP_solve_cuda!(args..., n_threads)
 
-  bench = @benchmark CUDA.@sync @cuda threads = 1 blocks = $n_blocks shmem = 2^15 QP_solve_cuda!($args...)
+  bench = @benchmark CUDA.@sync @cuda threads = $n_threads blocks = $n_blocks shmem = 2^15 QP_solve_cuda!($args..., $n_threads)
   display(bench)
   sol_out = copy(sols[1:n+m])
 
@@ -199,13 +199,13 @@ u = [b; 1.0 * ones(Float64, N * UDIM)]
 x1, u1 = split_vars(solve_osqp(P, q, A, l, u))
 x2, u2 = split_vars(solve_routine(P, q, A, l, u))
 #x3, u3 = split_vars(solve_jump(P, q, A, l, u))
-#x4, u4 = split_vars(solve_routine_cpu(P, q, A, l, u))
+x4, u4 = split_vars(solve_routine_cpu(P, q, A, l, u))
 
 @printf("Error x = %.4e\n", norm(x2 - x1) / norm(x1))
 @printf("Error u = %.4e\n", norm(u2 - u1) / norm(u1))
 println()
-#@printf("Error x = %.4e\n", norm(x4 - x1) / norm(x1))
-#@printf("Error u = %.4e\n", norm(u4 - u1) / norm(u1))
+@printf("Error x = %.4e\n", norm(x4 - x1) / norm(x1))
+@printf("Error u = %.4e\n", norm(u4 - u1) / norm(u1))
 
 #plot(u2[1, :], label="u2")
 #plot(u1[1, :], label="u1")

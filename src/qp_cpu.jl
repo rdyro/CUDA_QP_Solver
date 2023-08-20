@@ -61,10 +61,10 @@ function define_kernel_cpu(config)
       ) # alloc I
 
 
-      @simd for i in 1:n
+      @csimd for i in 1:n
         @cinbounds I[1][i], I[2][i], I[3][i] = i, i, sig
       end
-      @simd for i in 1:m
+      @csimd for i in 1:m
         @cinbounds I[1][n+i], I[2][n+i], I[3][n+i] = i + n, i + n, -1.0f0 / rho0
       end
       @cinbounds I[1][n+m+1] = n + m + 1
