@@ -23,9 +23,9 @@ end
 
 mutable struct WorkSF{T,N1,N2}
   slow_whole_buffer::SubArray{T,1,CuDeviceVector{T,N1},Tuple{UnitRange{Int64}},true}
-  slow_buffer      ::SubArray{T,1,CuDeviceVector{T,N1},Tuple{UnitRange{Int64}},true}
+  slow_buffer::SubArray{T,1,CuDeviceVector{T,N1},Tuple{UnitRange{Int64}},true}
   fast_whole_buffer::CuDeviceVector{T,N2}
-  fast_buffer      ::SubArray{T,1,CuDeviceVector{T,N2},Tuple{UnitRange{Int64}},true}
+  fast_buffer::SubArray{T,1,CuDeviceVector{T,N2},Tuple{UnitRange{Int64}},true}
 end
 
 """Make a memory block into a memory block tracking tuple."""

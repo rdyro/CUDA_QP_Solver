@@ -211,17 +211,36 @@ function spcopy!(Cp, Ci, Cx, Ap, Ai, Ax)
 end
 
 function spvcat!(
- Cp::CUDAArrayView{T1},
- Ci::CUDAArrayView{T1},
- Cx::CUDAArrayView{T2},
- m::Int32,
- Ap::CUDAArrayView{T1},
- Ai::CUDAArrayView{T1},
- Ax::CUDAArrayView{T2},
- Bp::CUDAArrayView{T1},
- Bi::CUDAArrayView{T1},
- Bx::CUDAArrayView{T2}
- ) where {T1, T2}
+  Cp::CUDAArrayView{T1},
+  Ci::CUDAArrayView{T1},
+  Cx::CUDAArrayView{T2},
+  m::Int32,
+  Ap::CUDAArrayView{T1},
+  Ai::CUDAArrayView{T1},
+  Ax::CUDAArrayView{T2},
+  Bp::CUDAArrayView{T1},
+  Bi::CUDAArrayView{T1},
+  Bx::CUDAArrayView{T2},
+) where {T1,T2}
+  l = 0
+  Cp[1] = 1
+  @cinbounds for i in 1:length(Ap)-1
+    @cinbounds for j in Ap[i]:Ap[i+1]-1
+      l += 1
+      Ci[l] = Ai[j]
+      Cx[l] = Ax[j]
+    end
+    @cinbounds for j in Bp[i]:Bp[i+1]-1
+      l += 1
+      Ci[l] = Bi[j] + m
+      Cx[l] = Bx[j]
+    end
+    Cp[i+1] = Cp[i] + (Ap[i+1] - Ap[i]) + (Bp[i+1] - Bp[i])
+  end
+  return
+end
+
+function spvcat!(Cp, Ci, Cx, m, Ap, Ai, Ax, Bp, Bi, Bx) # non-type annotated version for CPU
   l = 0
   Cp[1] = 1
   @cinbounds for i in 1:length(Ap)-1

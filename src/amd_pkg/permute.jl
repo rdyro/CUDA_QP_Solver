@@ -35,8 +35,8 @@ function permute_mat(P::SparseTuple, A::SparseTuple, perm::Vec, iperm::Vec, iwor
     #Px[Pp[i]:Pp[i+1]-1] .= Px[Pp[i]:Pp[i+1]-1][arg_idx]
 
     for j in 1:n
-      Pi[s+j-1] = iperm[Ai[Ap[perm[i]] + colperm[j] - 1]]
-      Px[s+j-1] = Ax[Ap[perm[i]] + colperm[j] - 1]
+      Pi[s+j-1] = iperm[Ai[Ap[perm[i]]+colperm[j]-1]]
+      Px[s+j-1] = Ax[Ap[perm[i]]+colperm[j]-1]
     end
   end
   return

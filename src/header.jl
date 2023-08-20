@@ -1,4 +1,6 @@
-macro identity(x) return esc(x) end
+macro identity(x)
+  return esc(x)
+end
 
 var"@cinbounds" = var"@inbounds"
 #var"@cinbounds" = var"@identity"

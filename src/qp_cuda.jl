@@ -2,16 +2,16 @@ function cuprint_matrix(H)
   H = trim_spmat(H...)
   Hp, Hi, Hx = H
   @cuprintf("{\"Ap\": [")
-  for i in 1:length(Hp) - 1
+  for i in 1:length(Hp)-1
     @cuprintf("%d, ", Int32(Hp[i]))
   end
   @cuprintf("%d], \"Ai\": [", Int32(Hp[end]))
   Hnnz = Hp[end] - 1
-  for i in 1:Hnnz - 1
+  for i in 1:Hnnz-1
     @cuprintf("%d, ", Int32(Hi[i]))
   end
   @cuprintf("%d], \"Ax\": [", Int32(Hi[Hnnz]))
-  for i in 1:Hnnz - 1
+  for i in 1:Hnnz-1
     @cuprintf("%f, ", Hx[i])
   end
   @cuprintf("%f]}\n", Hx[Hnnz])
@@ -20,13 +20,26 @@ end
 
 function define_kernel_cuda(config)
   return quote
-    #function QP_solve_cuda!(sols, infos, iters, n, m, P_, q_, A_, l_, u_, iwork_, fwork_)
-    function QP_solve_cuda!(sols, infos, iterss, ns, ms, Ps, qs, As, ls, us, iworks, fworks, work_sizes, offsets, n_threads)
+    function QP_solve_cuda!(
+      sols,
+      infos,
+      iterss,
+      ns,
+      ms,
+      Ps,
+      qs,
+      As,
+      ls,
+      us,
+      iworks,
+      fworks,
+      work_sizes,
+      offsets,
+      n_threads,
+    )
       rho0, sig = 1.0f1, 1.0f-6
 
       n_offsets, m_offsets, Pnnz_offsets, Annz_offsets, work_offsets = offsets
-      #(threadIdx().x != 1 || blockIdx().x != 1) && (return)
-      #@cuprintf("threadIdx().x = %d, blockIdx().x = %d\n", threadIdx().x, blockIdx().x)
 
       thread_idx = threadIdx().x
       idx = blockIdx().x
@@ -35,38 +48,35 @@ function define_kernel_cuda(config)
       end
 
       iters, n, m = iterss[idx], ns[idx], ms[idx]
-      sol =   view(sols, n_offsets[idx]+m_offsets[idx]+1:n_offsets[idx]+m_offsets[idx]+n+m)
-      q_ =    view(qs, n_offsets[idx]+1:n_offsets[idx]+n)
-      l_ =    view(ls, m_offsets[idx]+1:m_offsets[idx]+m)
-      u_ =    view(us, m_offsets[idx]+1:m_offsets[idx]+m)
-      
+      sol = view(sols, n_offsets[idx]+m_offsets[idx]+1:n_offsets[idx]+m_offsets[idx]+n+m)
+      q_ = view(qs, n_offsets[idx]+1:n_offsets[idx]+n)
+      l_ = view(ls, m_offsets[idx]+1:m_offsets[idx]+m)
+      u_ = view(us, m_offsets[idx]+1:m_offsets[idx]+m)
+
       Pps, Pis, Pxs = Ps
-      Pp_ = view(Pps, n_offsets[idx]+(idx - 1)+1:n_offsets[idx]+(idx-1)+n+1)
+      Pp_ = view(Pps, n_offsets[idx]+(idx-1)+1:n_offsets[idx]+(idx-1)+n+1)
       Pnnz = Pp_[end] - Pp_[1]
       Pi_ = view(Pis, Pnnz_offsets[idx]+1:Pnnz_offsets[idx]+Pnnz)
       Px_ = view(Pxs, Pnnz_offsets[idx]+1:Pnnz_offsets[idx]+Pnnz)
       P_ = (Pp_, Pi_, Px_)
 
       Aps, Ais, Axs = As
-      Ap_ = view(Aps, n_offsets[idx]+(idx - 1)+1:n_offsets[idx]+(idx-1)+n+1)
+      Ap_ = view(Aps, n_offsets[idx]+(idx-1)+1:n_offsets[idx]+(idx-1)+n+1)
       Annz = Ap_[end] - Ap_[1]
       Ai_ = view(Ais, Annz_offsets[idx]+1:Annz_offsets[idx]+Annz)
       Ax_ = view(Axs, Annz_offsets[idx]+1:Annz_offsets[idx]+Annz)
       A_ = (Ap_, Ai_, Ax_)
 
       work_size = work_sizes[idx]
-      iwork_ = view(iworks, work_offsets[idx]+1:work_offsets[idx]+work_size)::SubArray{Int32,1,CuDeviceVector{Int32,1},Tuple{UnitRange{Int64}},true}
+      #iwork_ = view(iworks, work_offsets[idx]+1:work_offsets[idx]+work_size)::SubArray{Int32,1,CuDeviceVector{Int32,1},Tuple{UnitRange{Int64}},true}
+      iwork_ = view(iworks, work_offsets[idx]+1:work_offsets[idx]+work_size)
       fwork_ = view(fworks, work_offsets[idx]+1:work_offsets[idx]+work_size)
       iwork = make_mem_sf(iwork_, CuDynamicSharedArray(Int32, 2^12))
-      fwork = make_mem_sf(fwork_, CuDynamicSharedArray(Float32, length(iwork.fast_buffer), 4 * 2^12))
-      info_ = view(infos, 5 * (idx - 1)+1:5 * idx)
+      fwork =
+        make_mem_sf(fwork_, CuDynamicSharedArray(Float32, length(iwork.fast_buffer), 4 * 2^12))
+      info_ = view(infos, 5*(idx-1)+1:5*idx)
 
       imem_fast, fmem_fast, imem_slow, fmem_slow = 0, 0, 0, 0
-
-      #iwork = make_mem_sf(iworks, CuDynamicSharedArray(Int32, 2^12))
-      #fwork = make_mem_sf(fworks, CuDynamicSharedArray(Float32, length(iwork.fast_buffer), 4 * 2^12))
-      #fwork = make_mem_sf(fworks, CuDynamicSharedArray(Float32, length(iwork[1]), 4 * 2^12))
-      #fwork = make_mem_sf(fworks, CuDynamicSharedArray(Float32, length(iworks), 4 * 2^12))
 
       # allocate working memory for temporary matrices #############################
       q = alloc_mem_sf!(fwork, n, $(config[:mem_q]))
@@ -187,7 +197,7 @@ function define_kernel_cuda(config)
 
       # compute the permutation and ordering ########################################
 
-      
+
       if thread_idx == 1
         H = trim_spmat(H...)
       end
@@ -309,8 +319,6 @@ function define_kernel_cuda(config)
 
       for it in Int32(1):Int32(iters)
         k += 1
-        #admm_set_rhs_top!(view(temp, 1:n), sig, x, q)
-        #admm_set_rhs_bot!(view(temp, n+1:n+m), z, y, rho0)
         admm_set_rhs_top!(view(temp, 1:n), sig, x, q, n_thread_sidx, n_thread_eidx)
         admm_set_rhs_bot!(view(temp, n+1:n+m), z, y, rho0, m_thread_sidx, m_thread_eidx)
 
@@ -318,40 +326,19 @@ function define_kernel_cuda(config)
 
         # solve the problem
         if $(config[:use_amd] == 1)
-          #vecpermute!(temp2, temp, perm, nm_thread_sidx, nm_thread_eidx)
-          ##LDLT_solve!(n + m, L..., Dinv, temp2)
-          #sync_threads()
-          #if thread_idx == 1
-          #  LDLT_solve!(n + m, L..., Dinv, temp2)
-          #end
-          ##LDLT_solve!(n + m, L..., Dinv, temp2, n_threads)
-          #vecpermute!(temp, temp2, iperm, nm_thread_sidx, nm_thread_eidx)
-
-          #if thread_idx == 1
-          #  vecpermute!(temp2, temp, perm)
-          #  LDLT_solve!(n + m, L..., Dinv, temp2)
-          #  vecpermute!(temp, temp2, iperm)
-          #end
-
           vecpermute!(temp2, temp, perm, nm_thread_sidx, nm_thread_eidx)
           sync_threads()
           LDLT_solve!(n + m, L..., Dinv, temp2, n_threads)
-          if thread_idx == 1
-            #LDLT_solve!(n + m, L..., Dinv, temp2)
-          end
           sync_threads()
           vecpermute!(temp, temp2, iperm, nm_thread_sidx, nm_thread_eidx)
-          #sync_threads()
         else
-          #LDLT_solve!(n + m, L..., Dinv, temp)
+          LDLT_solve!(n + m, L..., Dinv, temp, n_threads)
         end
         sync_threads()
 
         veccpy!(x, view(temp, 1:n), n_thread_sidx, n_thread_eidx)
         veccpy!(v, view(temp, n+1:n+m), m_thread_sidx, m_thread_eidx)
         sync_threads()
-        #admm_update_z!(z, v, y, rho0)
-        #admm_update_y!(y, z, l, u, rho0)
         admm_update_z!(z, v, y, rho0, n_thread_sidx, n_thread_eidx)
         admm_update_y!(y, z, l, u, rho0, m_thread_sidx, m_thread_eidx)
         sync_threads()

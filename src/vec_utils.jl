@@ -20,7 +20,7 @@ end
 end
 
 @inline function vecdot(c, a)
-  res = 0f0
+  res = 0.0f0
   @csimd for i in 1:length(a)
     @cinbounds res += c[i] * a[i]
   end

@@ -43,19 +43,7 @@ function LDLT_etree!(n, Ap, Ai, iwork, Lnz, info, etree)
   return
 end
 
-function LDLT_factor!(
-  n,
-  A,
-  L,
-  D,
-  Dinv,
-  info,
-  Lnz,
-  etree,
-  iwork,
-  fwork,
-  logicalFactor,
-)
+function LDLT_factor!(n, A, L, D, Dinv, info, Lnz, etree, iwork, fwork, logicalFactor)
   Ap, Ai, Ax = A
   Lp, Li, Lx = L
   positiveValuesInD = 0
@@ -75,23 +63,23 @@ function LDLT_factor!(
     # set all Yidx to be 'unused' initially in each column of L, the next
     # available space to start is just the first space in the column
     yMarkers[i] = LDLT_UNUSED
-    yVals[i] = 0f0
-    D[i] = 0f0
+    yVals[i] = 0.0f0
+    D[i] = 0.0f0
     LNextSpaceInCol[i] = Lp[i]
   end
 
   if !logicalFactor
     # First element of the diagonal D.
     D[1] = Ax[1]
-    if D[1] == 0f0
+    if D[1] == 0.0f0
       #println("Singular exception in factor")
       info[1] = -1
       return
     end
-    if D[1] > 0f0
+    if D[1] > 0.0f0
       positiveValuesInD += 1
     end
-    Dinv[1] = 1f0 / D[1]
+    Dinv[1] = 1.0f0 / D[1]
   end
 
   #Start from 1 here. The upper LH corner is trivially 0 in L b/c we are only
@@ -189,24 +177,24 @@ function LDLT_factor!(
 
       #reset the yvalues and indices back to zero and LDLT_UNUSED
       #once I'm done with them
-      yVals[cidx] = 0f0
+      yVals[cidx] = 0.0f0
       yMarkers[cidx] = LDLT_UNUSED
     end
 
     #Maintain a count of the positive entries
     #in D.  If we hit a zero, we can't factor
     #this matrix, so abort
-    if D[k] == 0f0
+    if D[k] == 0.0f0
       #println("Singular exception in factor")
       info[1] = -1
       return
     end
-    if D[k] > 0f0
+    if D[k] > 0.0f0
       positiveValuesInD += 1
     end
 
     #compute the inverse of the diagonal
-    Dinv[k] = 1f0 / D[k]
+    Dinv[k] = 1.0f0 / D[k]
   end
 
   #return positiveValuesInD
@@ -250,7 +238,7 @@ end
 @inline function LDLT_Lsolve!(n, Lp, Li, Lx, x, n_threads)
   for i in 1:n
     npt = ceil(Int32, (Lp[i+1] - Lp[i]) / n_threads) # n per thread
-    s, e = npt * (threadIdx().x - 1) + Lp[i], min(npt * threadIdx().x, Lp[i+1]-1)
+    s, e = npt * (threadIdx().x - 1) + Lp[i], min(npt * threadIdx().x, Lp[i+1] - 1)
     @cinbounds for j in s:e
       @cinbounds x[Li[j]] -= Lx[j] * x[i]
     end
@@ -263,10 +251,10 @@ end
 @inline function LDLT_LTsolve!(n, Lp, Li, Lx, x, n_threads)
   for i in n:-1:1
     npt = ceil(Int32, (Lp[i+1] - Lp[i]) / n_threads) # n per thread
-    s, e = npt * (threadIdx().x - 1) + Lp[i], min(npt * threadIdx().x, Lp[i+1]-1)
+    s, e = npt * (threadIdx().x - 1) + Lp[i], min(npt * threadIdx().x, Lp[i+1] - 1)
     @cinbounds for j in s:e
       @cinbounds x[i] -= Lx[j] * x[Li[j]]
-    end 
+    end
     sync_threads()
   end
   return
@@ -291,7 +279,7 @@ end
   sync_threads()
 
   #LDLT_LTsolve!(n, Lp, Li, Lx, b, n_threads)
-  if thread_idx ==  1
+  if thread_idx == 1
     LDLT_LTsolve!(n, Lp, Li, Lx, b)
   end
   sync_threads()

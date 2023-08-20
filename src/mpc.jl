@@ -18,10 +18,7 @@ function construct_Ab(f, fx, fu)
   fx_, fu_ = sparse.(fx, true), sparse.(fu, true)
   Ax = add(
     sparse(-I, N * xdim, N * xdim),
-    hcat(
-      vcat(spzeros(xdim, (N - 1) * xdim), blockdiag(fx_[2:end]...)),
-      spzeros(xdim * N, xdim),
-    ),
+    hcat(vcat(spzeros(xdim, (N - 1) * xdim), blockdiag(fx_[2:end]...)), spzeros(xdim * N, xdim)),
     true,
   )
   Au = blockdiag(fu_...)

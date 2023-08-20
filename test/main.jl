@@ -20,7 +20,7 @@ function read_matrix(fname)
   Ax = Float64.(data["Ax"])
   m = maximum(Ai)
   n = length(Ap) - 1
-  return SparseMatrixCSC{Float64, Int64}(m, n, Ap, Ai, Ax)
+  return SparseMatrixCSC{Float64,Int64}(m, n, Ap, Ai, Ax)
 end
 
 # make the system #################
@@ -93,13 +93,48 @@ function solve_routine(P, q, A, l, u)
   work_offsets = Int32.(cumsum([0; fill(work_sizes[1], n_blocks)]))[1:end-1]
 
   offsets = (n_offsets, m_offsets, Pnnz_offsets, Annz_offsets, work_offsets)
-  args = (sols, infos, iterss, ns, ms, (Pps, Pis, Pxs), qs, (Aps, Ais, Axs), ls, us, iwork, fwork, work_sizes, offsets)
+  args = (
+    sols,
+    infos,
+    iterss,
+    ns,
+    ms,
+    (Pps, Pis, Pxs),
+    qs,
+    (Aps, Ais, Axs),
+    ls,
+    us,
+    iwork,
+    fwork,
+    work_sizes,
+    offsets,
+  )
   args = map(to_cuda, args)
-  sols, infos, iterss, ns, ms, (Pps, Pis, Pxs), qs, (Aps, Ais, Axs), ls, us, iwork, fwork, work_sizes, offsets = args
+  sols,
+  infos,
+  iterss,
+  ns,
+  ms,
+  (Pps, Pis, Pxs),
+  qs,
+  (Aps, Ais, Axs),
+  ls,
+  us,
+  iwork,
+  fwork,
+  work_sizes,
+  offsets = args
 
-  CUDA.@sync @cuda threads = n_threads blocks = n_blocks shmem = 2^15 QP_solve_cuda!(args..., n_threads)
+  CUDA.@sync @cuda threads = n_threads blocks = n_blocks shmem = 2^15 QP_solve_cuda!(
+    args...,
+    n_threads,
+  )
 
-  bench = @benchmark CUDA.@sync @cuda threads = $n_threads blocks = $n_blocks shmem = 2^15 QP_solve_cuda!($args..., $n_threads)
+  bench =
+    @benchmark CUDA.@sync @cuda threads = $n_threads blocks = $n_blocks shmem = 2^15 QP_solve_cuda!(
+      $args...,
+      $n_threads,
+    )
   display(bench)
   sol_out = copy(sols[1:n+m])
 
@@ -114,7 +149,7 @@ function solve_routine(P, q, A, l, u)
 end
 
 function solve_routine_cpu(P, q, A, l, u)
-  info = zeros(Int32, 3)
+  info = zeros(Int32, 5)
   n, m = length(q), length(l)
   iwork, fwork = zeros(Int32, 10^6), zeros(Float32, 10^6)
   Pp, Pi, Px = sparseunwrap(P)
@@ -123,20 +158,85 @@ function solve_routine_cpu(P, q, A, l, u)
   iters = 200
   sol = zeros(n + m)
 
-  # CPU ###################################################
-  vars = sol, info, Pp, Pi, Px, Ap, Ai, Ax, q, l, u, iwork, fwork
-  sol, info, Pp, Pi, Px, Ap, Ai, Ax, q, l, u, iwork, fwork = map(to_cpu, vars)
-  args = (sol, info, iters, n, m, (Pp, Pi, Px), q, (Ap, Ai, Ax), l, u, iwork, fwork)
-  display(@benchmark QP_solve_cpu!($args...))
+  # CUDA ##################################################
+  #sol, info, Pp, Pi, Px, Ap, Ai, Ax, q, l, u, iwork, fwork = map(to_cuda, vars)
+
+  args = (sol, info, iters, n, m, Pp, Pi, Px, q, Ap, Ai, Ax, l, u, iwork, fwork)
+  n_blocks, n_threads = 164, 64
+  args = map(x -> reduce(vcat, [copy(x) for _ in 1:n_blocks]), args)
+  sols, infos, iterss, ns, ms, Pps, Pis, Pxs, qs, Aps, Ais, Axs, ls, us, iwork, fwork = args
+  work_sizes = fill(Int32(10^6), n_blocks)
+  n_offsets = Int32.(cumsum([0; fill(n, n_blocks)]))[1:end-1]
+  m_offsets = Int32.(cumsum([0; fill(m, n_blocks)]))[1:end-1]
+  Pnnz_offsets = Int32.(cumsum([0; fill(Pp[end] - 1, n_blocks)]))[1:end-1]
+  Annz_offsets = Int32.(cumsum([0; fill(Ap[end] - 1, n_blocks)]))[1:end-1]
+  work_offsets = Int32.(cumsum([0; fill(work_sizes[1], n_blocks)]))[1:end-1]
+
+  offsets = (n_offsets, m_offsets, Pnnz_offsets, Annz_offsets, work_offsets)
+  args = (
+    sols,
+    infos,
+    iterss,
+    ns,
+    ms,
+    (Pps, Pis, Pxs),
+    qs,
+    (Aps, Ais, Axs),
+    ls,
+    us,
+    iwork,
+    fwork,
+    work_sizes,
+    offsets,
+  )
+  sols,
+  infos,
+  iterss,
+  ns,
+  ms,
+  (Pps, Pis, Pxs),
+  qs,
+  (Aps, Ais, Axs),
+  ls,
+  us,
+  iwork,
+  fwork,
+  work_sizes,
+  offsets = args
 
   QP_solve_cpu!(args...)
-  return copy(sol)
+
+  bench = @benchmark QP_solve_cpu!($args...)
+  display(bench)
+  sol_out = copy(sols[1:n+m])
+
+  # actually solve ##############kk
+  #CUDA.@sync @cuda threads=1 blocks=1 QP_solve!(args...)
+  println("Max imem_fast: ", Array(infos)[1])
+  println("Max fmem_fast: ", Array(infos)[2])
+  println("Max imem_slow: ", Array(infos)[3])
+  println("Max fmem_slow: ", Array(infos)[4])
+  println("Iterations: ", Array(infos)[5])
+  return Array(sol_out)
 end
 
 function solve_osqp(P, q, A, l, u)
   m = OSQP.Model()
-  #OSQP.setup!(m, P=P, q=q, A=A, l=l, u=u; verbose=true, polishing=false, adaptive_rho=false, max_iter=Int32(1e3), check_termination=0)
-  OSQP.setup!(m, P=P, q=q, A=A, l=l, u=u; verbose=true, polishing=false, adaptive_rho=false, check_termination=0, linsys_solver="qdldl", cg_max_iter=10000)
+  OSQP.setup!(
+    m,
+    P=P,
+    q=q,
+    A=A,
+    l=l,
+    u=u;
+    verbose=true,
+    polishing=false,
+    adaptive_rho=false,
+    check_termination=0,
+    linsys_solver="qdldl",
+    max_iter=200,
+    rho=1e1,
+  )
   return copy(OSQP.solve!(m).x)
 end
 
@@ -190,25 +290,23 @@ P = spdiagm(0 => ones(Float64, N * (XDIM + UDIM)))
 q = zeros(Float64, N * (XDIM + UDIM))
 
 # construct limits
-#inf = Float64(1e20)
-#l = [-0.3 * ones(Float64, N * UDIM); -inf * ones(Float64, N * XDIM)]
-#u = [0.3 * ones(Float64, N * UDIM); inf * ones(Float64, N * XDIM)]
-l = [b; -1.0 * ones(Float64, N * UDIM)]
-u = [b; 1.0 * ones(Float64, N * UDIM)]
+u_lim = 1.0
+l = [b; -u_lim * ones(Float64, N * UDIM)]
+u = [b; u_lim * ones(Float64, N * UDIM)]
 
 x1, u1 = split_vars(solve_osqp(P, q, A, l, u))
 x2, u2 = split_vars(solve_routine(P, q, A, l, u))
-#x3, u3 = split_vars(solve_jump(P, q, A, l, u))
-x4, u4 = split_vars(solve_routine_cpu(P, q, A, l, u))
+x3, u3 = split_vars(solve_routine_cpu(P, q, A, l, u))
+x4, u4 = split_vars(solve_jump(P, q, A, l, u))
 
-@printf("Error x = %.4e\n", norm(x2 - x1) / norm(x1))
-@printf("Error u = %.4e\n", norm(u2 - u1) / norm(u1))
 println()
-@printf("Error x = %.4e\n", norm(x4 - x1) / norm(x1))
-@printf("Error u = %.4e\n", norm(u4 - u1) / norm(u1))
-
-#plot(u2[1, :], label="u2")
-#plot(u1[1, :], label="u1")
-#legend()
+@printf("OSQP error x = %.4e\n", norm(x1 - x4) / norm(x4))
+@printf("OSQP error u = %.4e\n", norm(u1 - u4) / norm(u4))
+println()
+@printf("CUDA error x = %.4e\n", norm(x2 - x4) / norm(x4))
+@printf("CUDA error u = %.4e\n", norm(u2 - u4) / norm(u4))
+println()
+@printf("CPU error x =  %.4e\n", norm(x3 - x4) / norm(x4))
+@printf("CPU error u =  %.4e\n", norm(u3 - u4) / norm(u4))
 
 nothing
