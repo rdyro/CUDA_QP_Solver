@@ -21,7 +21,9 @@ end
 
 @inline function admm_update_y!(y, z, l, u, rho0)
   @csimd for i in 1:length(y)
-    @cinbounds y[i] += rho0 * (z[i] - max(min(z[i] + y[i] / rho0, u[i]), l[i]))
+    new_z = max(min(z[i] + y[i] / rho0, u[i]), l[i])
+    @cinbounds y[i] += rho0 * (z[i] - new_z)
+    @cinbounds z[i] = new_z
   end
   return
 end
@@ -51,7 +53,9 @@ end
 
 @inline function admm_update_y!(y, z, l, u, rho0, sidx, eidx)
   @csimd for i in sidx:eidx
-    @cinbounds y[i] += rho0 * (z[i] - max(min(z[i] + y[i] / rho0, u[i]), l[i]))
+    new_z = max(min(z[i] + y[i] / rho0, u[i]), l[i])
+    @cinbounds y[i] += rho0 * (z[i] - new_z)
+    @cinbounds z[i] = new_z
   end
   return
 end

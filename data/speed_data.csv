@@ -1,0 +1,6 @@
+name,mean,std
+nothing,147.605,0.543450
+without bounds,93.120,3.231
+with shm,60.864,5.503
+with amd,37.767,0.730373
+with threads,24.225,0.210230

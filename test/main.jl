@@ -1,4 +1,4 @@
-using LinearAlgebra, SparseArrays, BenchmarkTools
+using LinearAlgebra, SparseArrays, BenchmarkTools, Statistics
 using PyPlot, Printf, JuMP, OSQP, JSON
 using CUDA, OSQP, Cthulhu, Infiltrator
 using NVTX
@@ -54,6 +54,7 @@ config = Dict{Symbol,Int32}(
   :use_amd => 1,
 )
 
+
 eval(define_kernel_cuda(config))
 eval(define_kernel_cpu(config))
 function to_cuda(x)
@@ -68,21 +69,21 @@ to_cpu(x) = Array(x)
 
 copy_tuple(x) = map(copy, x)
 
-function solve_routine(P, q, A, l, u)
+function solve_routine(P, q, A, l, u, n_iters, n_blocks, n_threads)
   info = zeros(Int32, 5)
   n, m = length(q), length(l)
   iwork, fwork = zeros(Int32, 10^6), zeros(Float32, 10^6)
   Pp, Pi, Px = sparseunwrap(P)
   Ap, Ai, Ax = sparseunwrap(A)
 
-  iters = 200
+  iters = n_iters
   sol = zeros(n + m)
 
   # CUDA ##################################################
   #sol, info, Pp, Pi, Px, Ap, Ai, Ax, q, l, u, iwork, fwork = map(to_cuda, vars)
 
   args = (sol, info, iters, n, m, Pp, Pi, Px, q, Ap, Ai, Ax, l, u, iwork, fwork)
-  n_blocks, n_threads = 164, 64
+  n_blocks, n_threads = n_blocks, n_threads
   args = map(x -> reduce(vcat, [copy(x) for _ in 1:n_blocks]), args)
   sols, infos, iterss, ns, ms, Pps, Pis, Pxs, qs, Aps, Ais, Axs, ls, us, iwork, fwork = args
   work_sizes = fill(Int32(10^6), n_blocks)
@@ -145,7 +146,7 @@ function solve_routine(P, q, A, l, u)
   println("Max imem_slow: ", Array(infos)[3])
   println("Max fmem_slow: ", Array(infos)[4])
   println("Iterations: ", Array(infos)[5])
-  return Array(sol_out)
+  return Array(sol_out), bench
 end
 
 function solve_routine_cpu(P, q, A, l, u)
@@ -261,11 +262,18 @@ end
 function plot_dynamics(x, u; clear=true, kw...)
   figure(324234)
   (clear) && (clf())
-  plot(u[1, :]; label="u1", alpha=0.5, kw...)
-  plot(x[1, :]; label="x1", alpha=0.5, kw...)
-  plot(x[2, :]; label="x2", alpha=0.5, kw...)
+  plot(u[1, :]; label="u1", kw...)
+  plot([0, size(u, 2)], [1.0, 1.0]; label="u_upper_bound", linestyle="--", color="black", kw...)
+  plot([0, size(u, 2)], [-1.0, -1.0]; label="u_lower_bound", linestyle="--", color="black", kw...)
+  plot(x[1, :]; label="x1", kw...)
+  plot(x[2, :]; label="x2", kw...)
+  title("MPC Solution")
+  xlabel("Time step")
   legend()
   tight_layout()
+  savefig("figs/dynamics_solution.png", dpi=200, bbox_inches="tight", pad_inches=0.1)
+  savefig("figs/dynamics_solution.pdf", bbox_inches="tight", pad_inches=0.1)
+  savefig("figs/dynamics_solution.svg", bbox_inches="tight", pad_inches=0.1)
   return
 end
 
@@ -294,19 +302,65 @@ u_lim = 1.0
 l = [b; -u_lim * ones(Float64, N * UDIM)]
 u = [b; u_lim * ones(Float64, N * UDIM)]
 
-x1, u1 = split_vars(solve_osqp(P, q, A, l, u))
-x2, u2 = split_vars(solve_routine(P, q, A, l, u))
-x3, u3 = split_vars(solve_routine_cpu(P, q, A, l, u))
-x4, u4 = split_vars(solve_jump(P, q, A, l, u))
 
-println()
-@printf("OSQP error x = %.4e\n", norm(x1 - x4) / norm(x4))
-@printf("OSQP error u = %.4e\n", norm(u1 - u4) / norm(u4))
-println()
-@printf("CUDA error x = %.4e\n", norm(x2 - x4) / norm(x4))
-@printf("CUDA error u = %.4e\n", norm(u2 - u4) / norm(u4))
-println()
-@printf("CPU error x =  %.4e\n", norm(x3 - x4) / norm(x4))
-@printf("CPU error u =  %.4e\n", norm(u3 - u4) / norm(u4))
+
+
+
+#n_threads = [1, 2, 4, 8, 16, 32, 64, 128, 256]
+#mus, stds = Float64[], Float64[]
+#for n in n_threads
+#  println("n_threads = $(n)")
+#  bench = solve_routine(P, q, A, l, u, 2, n)[2]
+#  push!(mus, mean(bench.times ./ 1e6))
+#  push!(stds, std(bench.times ./ 1e6))
+#  sleep(1.0)
+#end
+
+
+
+
+
+
+#n_blocks = collect(2:10:512)
+#mus, stds = Float64[], Float64[]
+#for n in n_blocks
+#  println("n_threads = $(n)")
+#  bench = solve_routine(P, q, A, l, u, n, 32)[2]
+#  push!(mus, mean(bench.times ./ 1e6))
+#  push!(stds, std(bench.times ./ 1e6))
+#  sleep(0.5)
+#end
+
+n_iters = collect(0:100:1000)
+mus, stds = Float64[], Float64[]
+for n in n_iters
+  println("n_iters = $(n)")
+  bench = solve_routine(P, q, A, l, u, n, 2, 64)[2]
+  push!(mus, mean(bench.times ./ 1e6))
+  push!(stds, std(bench.times ./ 1e6))
+  sleep(0.5)
+end
+write("time_vs_iters.json", JSON.json([n_iters, mus, stds]))
+
+
+
+
+
+#x1, u1 = split_vars(solve_osqp(P, q, A, l, u))
+#x2, u2 = split_vars(solve_routine(P, q, A, l, u))
+#x3, u3 = split_vars(solve_routine_cpu(P, q, A, l, u))
+#x4, u4 = split_vars(solve_jump(P, q, A, l, u))
+#
+#plot_dynamics(x2, u2, clear=true)
+#
+#println()
+#@printf("OSQP error x = %.4e\n", norm(x1 - x4) / norm(x4))
+#@printf("OSQP error u = %.4e\n", norm(u1 - u4) / norm(u4))
+#println()
+#@printf("CUDA error x = %.4e\n", norm(x2 - x4) / norm(x4))
+#@printf("CUDA error u = %.4e\n", norm(u2 - u4) / norm(u4))
+#println()
+#@printf("CPU error x =  %.4e\n", norm(x3 - x4) / norm(x4))
+#@printf("CPU error u =  %.4e\n", norm(u3 - u4) / norm(u4))
 
 nothing
